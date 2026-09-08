@@ -43,6 +43,7 @@ import { preferredAgentRole } from '../shared/agentRole';
 import { mergeTaskLedger } from '../shared/taskLedger';
 import { expandTilde } from './fs';
 import { resolveGodName } from '../shared/godIdentity';
+import type { HiveRouteEvent } from '../shared/hiveRouteEvent';
 
 /** The subset of HarnessConfig the hive consumes for the default-MCP merge.
  *  Kept as a local shape so hive.ts never imports the foundation-owned config
@@ -565,11 +566,20 @@ export class HiveManager {
     return [launcher ? `"${launcher}"` : 'node', `"${script}"`, ...args].join(' ');
   }
 
-  /** Same, but UNQUOTED — only for configs or platforms that cannot preserve
-   *  embedded quotes. POSIX JSON hook configs must use nodeRun() because the
-   *  user-selected hive path may legitimately contain spaces. */
-  private nodeRunUnquoted(script: string, ...args: string[]): string {
-    return [this.nodeLauncher() ?? 'node', script, ...args].join(' ');
+  /** Same, but for hook runners that hand the string to **cmd.exe** (agy's
+   *  hooks.json, Codex's config.toml). There `call` is what keeps cmd from
+   *  stripping a quoted batch path's opening quote, so a hive folder with a
+   *  space in it still resolves.
+   *
+   *  It must NOT be used for the sh/bash runners — Claude executes each hook
+   *  through `sh -c`, where `call` is not a command and every hook dies with
+   *  `call: command not found` before the shim is ever reached. Quoting alone
+   *  is both necessary and sufficient there: backslashes inside double quotes
+   *  are literal to bash, and it launches a .cmd shim happily. */
+  private nodeRunCmdShell(script: string, ...args: string[]): string {
+    const launcher = this.nodeLauncher();
+    if (process.platform !== 'win32' || !launcher) return this.nodeRun(script, ...args);
+    return ['call', `"${launcher}"`, `"${script}"`, ...args].join(' ');
   }
 
   /** One proxy sidecar per live proxy-tier agent, keyed by agentId. Spawned in
@@ -929,6 +939,10 @@ export class HiveManager {
       // → `Unknown command`. So DROP the positional and hand the protocol back as
       // seedPrompt; the renderer types it into the TUI after boot (ondev-b).
       const deg = degraded ? { degraded } : {};
+      // Preparing the coordinator must never submit an AI turn, regardless of
+      // whether its provider accepts positional prompts, flags, or typed seeds.
+      // The renderer attaches this context to the first user-queued request.
+      if (meta.isGod) return { args: [...preArgs], env, seedPrompt: prompt, ...deg };
       if (preset.seedDelivery === 'type-into-tui') return { args: [...preArgs], env, seedPrompt: prompt, ...deg };
       // If a provider somehow exposes neither a flag nor a positional prompt, spawn bare.
       if (flag) return { args: [...preArgs, flag, prompt], env, ...deg };
@@ -953,7 +967,8 @@ export class HiveManager {
     const args: string[] = [];
     if (!claudeProvider) return { args, env };
 
-    args.push('--append-system-prompt', this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false, opts.kgCliPath));
+    const prompt = this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false, opts.kgCliPath);
+    if (!meta.isGod) args.push('--append-system-prompt', prompt);
 
     // Phase 1 — autonomy: attach lifecycle hooks via --settings (no edits to the
     // user's repo) so the agent reports activity and drains its inbox on Stop.
@@ -965,7 +980,7 @@ export class HiveManager {
       this.writeJson(settingsPath, this.hookSettings(shim, meta.cwd, opts.mcpDefaults, opts.theme, this.sandboxWritableDirs(meta, dir, root, opts.extraWritableDirs)));
       args.push('--settings', settingsPath);
     }
-    return { args, env };
+    return { args, env, ...(meta.isGod ? { seedPrompt: prompt } : {}) };
   }
 
   /** Update the durable job string (hire role) without respawning. Refreshes
@@ -1639,7 +1654,7 @@ export class HiveManager {
       }
     }
     this.appendLog({ kind: 'message', from: msg.from, to: msg.to, act: msg.act, subject: msg.subject, id: msg.id, delivered });
-    this.emitMessage(msg, targets);
+    this.emitMessage(msg, delivered);
     // Main-process observer (e.g. the closing-time controller watching for the
     // team's ACKs and the god's COMPLETE). Best-effort, never breaks routing.
     try { this.routedObserver?.(msg, targets); } catch { /* observer error */ }
@@ -1652,20 +1667,22 @@ export class HiveManager {
     this.routedObserver = cb;
   }
 
-  /** Tell the renderer a message was routed, with its resolved recipients, so
-   *  the floor can fly an envelope from the sender to each one. Best-effort. */
-  private emitMessage(msg: HiveMessage, targets: string[]): void {
-    this.emit?.('hive:message', {
+  /** Tell the renderer which recipients confirmed delivery so the floor can
+   *  represent the real handoff. This event is deliberately content-free. */
+  private emitMessage(msg: HiveMessage, deliveredTargets: string[]): void {
+    const event: HiveRouteEvent = {
       id: msg.id,
+      conversation: msg.conversation,
+      inReplyTo: msg.in_reply_to,
       from: msg.from,
-      to: msg.to,
+      deliveredTargets,
       act: msg.act,
-      subject: msg.subject,
-      targets,
-      // Coral-tints the floor envelope for a message the agent flagged for the
-      // human (now routed to the god proxy). Cosmetic only — no queue behind it.
-      needsHuman: msg.to === 'human'
-    });
+      requiresReply: msg.requires_reply,
+      // A direct human address is routed through the god proxy, while an agent
+      // can also explicitly flag ordinary mail for human attention.
+      needsHuman: msg.to === 'human' || msg.needs_human
+    };
+    this.emit?.('hive:message', event);
   }
 
   /** Non-Claude providers cannot drain hive inbox; hand direct mail to the
@@ -1954,8 +1971,8 @@ export class HiveManager {
    *
    *  Two agy-isms handled: (1) antigravity-cli#49 — agy LOADS hooks from
    *  `~/.gemini/antigravity-cli/hooks.json` but TRIGGERS from `~/.gemini/config/
-   *  hooks.json`, so we write BOTH; (2) on Windows commands go to cmd.exe and
-   *  agy mangles embedded quotes, so that platform retains the legacy form.
+   *  hooks.json`, so we write BOTH; (2) on Windows commands go through cmd.exe,
+   *  with a quoted batch call so spaces in the hive path survive.
    *  Runtime-scoped by AGENT_ID (the shim no-ops for non-hive agy sessions), so
    *  this global config never disturbs the user's own `agy` usage. Best-effort,
    *  idempotent (only our own group is overwritten). */
@@ -1966,9 +1983,7 @@ export class HiveManager {
     mkdirSync(join(root, 'bin'), { recursive: true });
     writeFileSync(shim, AGY_HOOK_SHIM, 'utf8');
     // Bundled node, not bare `node` — agy's hooks run with a stripped PATH too.
-    const command = (event: string) => process.platform === 'win32'
-      ? this.nodeRunUnquoted(shim, event)
-      : this.nodeRun(shim, event);
+    const command = (event: string) => this.nodeRunCmdShell(shim, event);
     const tool = (event: string) => ({
       matcher: '*',
       hooks: [{ type: 'command', command: command(event), timeout: 0 }]
@@ -2017,9 +2032,7 @@ export class HiveManager {
         hooks: [{
           name: `munder-hive-${name}`,
           type: 'command',
-          command: process.platform === 'win32'
-            ? this.nodeRunUnquoted(shim)
-            : this.nodeRun(shim),
+          command: this.nodeRun(shim),
           timeout: 30000
         }]
       });
@@ -2116,12 +2129,7 @@ export class HiveManager {
       if (shim) {
         const events = ['PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop',
           'SessionStart', 'UserPromptSubmit', 'PreCompact', 'PostCompact'];
-        // Preserve the existing Windows .cmd shape: nested command quotes pass
-        // through a different shell stack there (#350). The reported Codex bug
-        // is POSIX, where ordinary shell quoting is both necessary and verified.
-        const command = process.platform === 'win32'
-          ? this.nodeRunUnquoted(shim)
-          : this.nodeRun(shim);
+        const command = this.nodeRunCmdShell(shim);
         config += '\n# --- munder-hive lifecycle hooks (auto-generated; do not edit) ---\n';
         for (const ev of events) {
           config += `\n[[hooks.${ev}]]\n[[hooks.${ev}.hooks]]\ntype = "command"\ncommand = ${JSON.stringify(command)}\ntimeout = 30\n`;

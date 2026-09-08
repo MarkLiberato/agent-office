@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, powerMonitor, powerSaveBlocker, screen, shell, Notification } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, powerMonitor, powerSaveBlocker, protocol, screen, shell, Notification } from 'electron';
 import { spawn } from 'node:child_process';
 import {
   rmSync, existsSync, readFileSync, readdirSync, statSync, cpSync, writeFileSync,
@@ -70,6 +70,7 @@ import { resolveGodName } from '../shared/godIdentity';
 import { fetchHireManifest, readHireManifestFiles } from './hire';
 import { parseHireDeepLink, type HireManifest } from '../shared/hire';
 import { ClosingTimeController } from './closingTime';
+import { codexPermissionArgs, codexResumeArgs } from '../shared/codexLaunch';
 import {
   argsWithAutoModeFlag,
   inferAgentProvider,
@@ -92,6 +93,21 @@ import {
   codexRemoteSocketFits,
   withCodexRemoteArgs
 } from '../shared/codexRemote';
+import { TTS_SCHEME, registerTtsProtocol } from './ttsProtocol';
+
+// The office floor's TTS weights are served over their own scheme (the handler
+// itself is installed in whenReady). This declaration MUST run before the app is
+// ready: supportFetchAPI lets the synth worker fetch these URLs at all, and
+// bypassCSP keeps the renderer's content policy from blocking the model.
+protocol.registerSchemesAsPrivileged([
+  { scheme: TTS_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, bypassCSP: true } }
+]);
+
+// Set identity before config, SQLite, Chromium sessions, or the instance lock use
+// Electron paths, so development and packaged builds never share upstream data.
+app.setName('Office Agent');
+app.setPath('userData', join(app.getPath('appData'), 'Office Agent'));
+app.setAppUserModelId('local.officeagent.app');
 
 const isDev = !!process.env.ELECTRON_RENDERER_URL;
 
@@ -1383,12 +1399,20 @@ let lastSlackUrl: string | undefined;
  *  renderer keeps them split). Trailing space is intentional so the user's message
  *  reads naturally after it. */
 function buildAutonomousRequestProtocol(channel: string, threadTs: string, helperPath: string): string {
+  // Step 5 names the coordinator in prose. Read his LIVE name rather than
+  // hardcoding the upstream cast's "Michael" — the worker is being told who to
+  // report to, and a name nobody on the floor answers to is worse than none.
+  let godName = '';
+  try {
+    const reg = hive.registry();
+    godName = resolveGodName(reg.agents[reg.godId ?? 'god']?.name);
+  } catch { /* registry not readable yet — fall back to the plain "you" below */ }
   return `[AUTONOMOUS REQUEST PROTOCOL — this request arrived via Slack; no interactive human is watching] Handle it under this protocol:
 1. ROUTE FAST — triage and hand this to the single most-relevant agent right away. CHECK THE LIVE ROSTER FIRST (active agents in registry.json + their state in fleet.json) and prefer an EXISTING agent that fits — especially when the request names one ("ask Pam…", "have Jim…"): route to that agent and only spawn a new one if none is a sensible fit. Decompose only if it genuinely needs several. Don't sit on it.
 2. DELEGATE WITH THE REPLY HANDLE — tell that agent to do the work autonomously AND to post its result back to THIS Slack thread itself when done, using exactly: "${hive.nodeCommand()}" "${helperPath}" --channel ${channel} --thread ${threadTs} --text "<substantive result>" (that first path is the harness's bundled Node, already resolved for this machine — pass it verbatim; bare "node" is not on the hook/agent PATH on many machines.)
 3. AUTONOMOUS EXECUTION — no interactive questions. PAUSE/ask ONLY for high-severity actions: pushing to main or any remote; buying or spawning infrastructure or paid services; deleting an existing repo, file, or folder it did not create. Stay READ-ONLY at critical infrastructure and git-push-type changes unless explicitly approved.
 4. DIRECT, SUBSTANTIVE REPLY — the agent posts a real Slack-mrkdwn answer (short *bold* headline + the actual outcome/specifics/links), NEVER a bare "done"/":white_check_mark:".
-5. REPORT TO GOD — the agent then tells you (Michael) what it did.
+5. REPORT TO GOD — the agent then tells you${godName ? ` (${godName})` : ''} what it did.
 6. ASYNC QUESTIONS — if a decision is genuinely needed, don't block: post the question + numbered OPTIONS to the thread via that reply command, and record {q, options, askedAt (ISO + day & time), thread_ts ${threadTs}} so the threaded human reply correlates back and resumes.
 The user's message starts now: `;
 }
@@ -2208,15 +2232,8 @@ async function handleHireLink(link: string): Promise<void> {
   analytics.trackFeature('hire_install');
 }
 
-// Register the protocol. In dev (electron .) Windows needs the explicit
-// exe+args form or the registration points at electron.exe with no entry.
-if (process.defaultApp) {
-  if (process.argv.length >= 2) {
-    app.setAsDefaultProtocolClient('munderdifflin', process.execPath, [resolve(process.argv[1])]);
-  }
-} else {
-  app.setAsDefaultProtocolClient('munderdifflin');
-}
+// Local fork: do not take ownership of the upstream munderdifflin:// protocol.
+// The existing explicit manifest-file import remains available.
 
 // Deep links on Windows/Linux arrive as the argv of a SECOND process — take the
 // single-instance lock and forward them to the running instance. (macOS gets
@@ -2292,7 +2309,7 @@ function createWindow(opts: { floor?: boolean } = {}): BrowserWindow {
     ...(geom && geom.x !== undefined && geom.y !== undefined ? { x: geom.x, y: geom.y } : {}),
     minWidth: MIN_WIN.width,
     minHeight: MIN_WIN.height,
-    title: isFloor ? 'Munder Difflin — Floor' : 'Munder Difflin',
+    title: isFloor ? 'Office Agent — Floor' : 'Office Agent',
     backgroundColor: '#FFF8E7',
     titleBarStyle: 'hiddenInset',
     show: false,
@@ -2816,8 +2833,8 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     // modelForRole resolves it and that wins over the worker-oriented defaultModel.
     if (!args.includes('--model')) {
       const m = opts.hive.isGod
-        ? modelForRole(opts.hive, cfg)
-        : cfg.defaultModel ?? modelForRole(opts.hive, cfg);
+        ? modelForRole(opts.hive, cfg, provider)
+        : cfg.defaultModel ?? modelForRole(opts.hive, cfg, provider);
       if (m) args.push('--model', m);
     }
     // Name the Remote Control session after the agent (Michael, Jim, Dev1…) so it
@@ -2901,7 +2918,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
         // prompt flag), so the id must come BEFORE it — appending the id last made
         // codex read the prompt as SESSION_ID ("No saved session found with ID
         // You are \"Dev2\"…") and the id as the prompt.
-        if (args[0] !== rsub) { opts.args = [rsub, sid, ...args]; didResume = true; }
+        if (args[0] !== rsub) { opts.args = codexResumeArgs(args, sid); didResume = true; }
         console.log('[resume] codex resume', sid, 'in', ownerHome);
       }
     }
@@ -2925,13 +2942,13 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   // agent (spawned with --permission-mode bypassPermissions) doesn't stall on an
   // interactive prompt it can't answer and exit code 1. Best-effort, never blocks.
   // Claude-only — other CLIs handle their own permission UX.
-  if (claudeProvider) {
+  if (claudeProvider && readConfig().autoMode) {
     try { ensureClaudePermissionsAccepted(opts.cwd); } catch { /* never block spawn */ }
   }
   // Suppress first-run interactive prompts for providers that need it (e.g. Codex
   // directory-trust gate via CODEX_NON_INTERACTIVE). Merges into any env already
   // set on opts.
-  const nonInteractiveEnv = nonInteractiveEnvForProvider(provider);
+  const nonInteractiveEnv = readConfig().autoMode ? nonInteractiveEnvForProvider(provider) : {};
   if (Object.keys(nonInteractiveEnv).length > 0) {
     opts.env = { ...(opts.env ?? {}), ...nonInteractiveEnv };
   }
@@ -2986,13 +3003,10 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     }
     opts.env = { ...(opts.env ?? {}), ...extra };
   }
-  // Codex Remote is daemon-based (there is no `/remote-control` slash command).
-  // Start/enable the daemon under this agent's isolated CODEX_HOME and connect
-  // the TUI to it so the thread is visible in ChatGPT mobile. Best-effort: an
-  // unavailable/older Codex install still gets a normal local terminal.
-  if (provider === 'codex' && opts.hive?.id) {
-    await enableCodexRemoteForSpawn(opts, opts.hive.id);
-  }
+  // Enforce the office's manual posture even when the user's copied Codex
+  // config or saved command had opted out of approvals or sandboxing.
+  if (provider === 'codex') opts.args = codexPermissionArgs(opts.args ?? [], readConfig().autoMode);
+  // A local spawn never starts a remote-control daemon or enables remote access.
   const res = ptyManager.spawn(opts, owner);
   if (res.ok) analytics.track('agent_spawned', { provider });
   else analytics.track('agent_spawn_failed', { provider, reason: spawnFailReason(res.error) });
@@ -3004,7 +3018,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   const worktreePath = worktreePaths.get(opts.id);
   // `cwd` echoes back the TILDE-EXPANDED absolute path so the renderer's agent
   // record matches what the registry and the PTY actually used.
-  return { ...res, cwd: opts.cwd, ...(worktreePath ? { worktreePath } : {}), ...(resumeNotFound ? { resumeNotFound: true } : {}), ...(didResume ? { resumed: true } : {}), ...(seedPrompt ? { seedPrompt } : {}) };
+  return { ...res, cwd: opts.cwd, ...(worktreePath ? { worktreePath } : {}), ...(resumeNotFound ? { resumeNotFound: true } : {}), ...(didResume ? { resumed: true } : {}), ...(seedPrompt && !didResume ? { seedPrompt } : {}) };
 }
 ipcMain.handle('pty:write', (_evt, id: string, data: string) => {
   if (typeof id !== 'string' || typeof data !== 'string') return { ok: false, error: 'invalid args' };
@@ -5269,6 +5283,11 @@ function onSystemResume(reason: string): void {
 }
 
 app.whenReady().then(() => {
+  // Serve the Kokoro TTS weights to the renderer's synth worker. Registered
+  // before the first window exists, because the worker starts fetching the
+  // model as soon as the office floor mounts.
+  registerTtsProtocol();
+
   // Realtime Michael mic-gate hygiene (rt-8 / Pam rt-10 nit): the voice session
   // opens the mic permission gate by persisting realtimeVoiceEnabled=true and
   // closes it on disconnect — but a hard crash/reload mid-session skips that

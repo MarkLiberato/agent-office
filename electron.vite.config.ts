@@ -8,13 +8,12 @@ const pkg = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf-8')
 const define = { __APP_VERSION__: JSON.stringify(pkg.version) };
 
 // Anonymous product analytics (src/main/analytics.ts, contract in TELEMETRY.md).
-// The PostHog project key is a PUBLIC write-only token, but it is still injected
-// at BUILD time from the environment (release CI sets it from a repo secret)
-// rather than committed: local dev builds and forks compile with '' and the
-// whole analytics module no-ops for them. Main-process only.
+// This local derivative always compiles with an empty key, regardless of build
+// environment. The analytics module therefore no-ops. Main-process only.
 const defineMain = {
   ...define,
-  __POSTHOG_KEY__: JSON.stringify(process.env.POSTHOG_KEY ?? ''),
+  // Local derivative: even an inherited release environment cannot enable analytics.
+  __POSTHOG_KEY__: JSON.stringify(''),
   __POSTHOG_HOST__: JSON.stringify(process.env.POSTHOG_HOST ?? 'https://us.i.posthog.com')
 };
 

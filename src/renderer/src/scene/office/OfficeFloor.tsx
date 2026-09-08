@@ -9,8 +9,12 @@ import { Camera } from './Camera';
 import { Character, paintCup } from './Character';
 import { DeskScreen } from './DeskScreen';
 import { MessageEnvelope, type MessageAct } from './MessageEnvelope';
-import { hexToNumber, DEFAULT_CHARACTER } from './cast';
+import { hexToNumber, DEFAULT_CHARACTER, type OfficeCharacterName } from './cast';
 import { pickSoloLine, pickExchange, type BreakSpot } from './cafeteriaLines';
+import { officeAudio } from '@/audio';
+import { HiveSpeechBroker, isConfirmedHiveDelivery } from '@/audio/hiveSpeechCues';
+import { useRealtimeMichael } from '@/realtime/session';
+import { resolveGodName } from '@shared/godIdentity';
 import { colors } from '@/design/tokens';
 import { loadTheme, resolveThemeMap, themeTilesetUrls } from './themeLoader';
 import {
@@ -28,8 +32,10 @@ import type { Tile, Facing, ErrandKind, ErrandSpot } from './themeRegistry';
 interface CafeChat {
   lines: readonly string[];        // alternating beats: even = initiator, odd = partner
   partnerId: string;
+  conversationId: string;
   idx: number;                     // next beat to speak
-  beat: number;                    // seconds until the next beat
+  inFlight: boolean;               // audio completion advances the next beat
+  cancelled?: boolean;
 }
 
 interface CafeBreak {
@@ -225,6 +231,30 @@ export function OfficeFloor() {
     if (paused) ticker.stop(); else ticker.start();
   }, [paused]);
 
+  // Bring the office's sound up with the floor: this loads the TTS model once
+  // and starts the room tone. It is safe to call repeatedly and degrades to a
+  // silent (but working) floor if the model is missing.
+  useEffect(() => {
+    void officeAudio.init();
+  }, []);
+
+  // Silence the floor for the WHOLE realtime session, not just while the
+  // coordinator is speaking: the mic is live throughout, so an agent's quip
+  // would be picked up and transcribed as if the user had said it.
+  const realtimeStatus = useRealtimeMichael().status;
+  useEffect(() => {
+    officeAudio.setMuted(realtimeStatus !== 'off');
+  }, [realtimeStatus]);
+
+  // A busy office sounds busier: the ambience scheduler tightens its cadence as
+  // more agents are actually doing something.
+  const busyAgentCount = useStore(
+    (s) => s.agents.filter((a) => a.status === 'working' || a.status === 'thinking' || a.status === 'compacting').length
+  );
+  useEffect(() => {
+    officeAudio.setActivity(busyAgentCount);
+  }, [busyAgentCount]);
+
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
@@ -240,6 +270,7 @@ export function OfficeFloor() {
     // broadcast doesn't bury the floor in paper.
     const envelopes: MessageEnvelope[] = [];
     const MAX_ENVELOPES = 16;
+    const hiveSpeech = new HiveSpeechBroker();
 
     const init = async () => {
       // Load the active theme bundle (falls back to 'office' on a bad/absent bundle).
@@ -608,6 +639,14 @@ export function OfficeFloor() {
         return Math.hypot(p.x - px, p.y - py);
       };
 
+      /** Pan follows where the avatar is standing, but stays conversationally
+       * narrow so headphones never put a voice hard in one ear. */
+      const speechPan = (rt: Runtime): number => {
+        const width = Math.max(1, mapRenderer.width * mapRenderer.tileSize);
+        const normalized = (rt.character.getPixelPosition().x / width) * 2 - 1;
+        return Math.max(-0.68, Math.min(0.68, normalized * 0.68));
+      };
+
       const emitQuip = (id: string, rt: Runtime, spotIdx: number): void => {
         const spot = cafeSpots[spotIdx];
         const character = agentById(id)?.character ?? DEFAULT_CHARACTER;
@@ -617,10 +656,18 @@ export function OfficeFloor() {
         // the proximity director below).
         const p = rt.character.getPixelPosition();
         if (godDistance(p.x, p.y) > 96 && Math.random() < 0.35) {
-          rt.character.showThought(t(GOSSIP_KEYS[Math.floor(Math.random() * GOSSIP_KEYS.length)]));
+          const line = t(GOSSIP_KEYS[Math.floor(Math.random() * GOSSIP_KEYS.length)]);
+          rt.character.say(line, { priority: 'ambient', pan: speechPan(rt) });
           return;
         }
-        rt.character.showThought(pickSoloLine(character, spot.spot, seed));
+        // The boss's live name, not the borrowed cast's — see cafeteriaLines.withGod().
+        const bossName = resolveGodName(useStore.getState().agents.find((a) => a.isGod)?.name);
+        const line = pickSoloLine(character, spot.spot, seed, bossName);
+        rt.character.say(line, { priority: 'ambient', pan: speechPan(rt) });
+        // The room reacts to where they are standing: the machine really does
+        // run when someone reaches it.
+        if (spot.spot === 'coffee') officeAudio.trigger('coffee');
+        else if (spot.spot === 'vending') officeAudio.trigger('vending');
       };
 
       // If the newcomer's table-mate is already lingering (and neither is mid-
@@ -636,10 +683,60 @@ export function OfficeFloor() {
         if (!prt?.brk || prt.brk.phase !== 'lingering') return false;
         if (rt.brk.chat || rt.brk.chattingWith || prt.brk.chat || prt.brk.chattingWith) return false;
         const character = agentById(id)?.character ?? DEFAULT_CHARACTER;
-        const lines = pickExchange(character, Math.floor(Math.random() * 1e6));
-        rt.brk.chat = { lines, partnerId, idx: 0, beat: 0 };
+        const bossName = resolveGodName(useStore.getState().agents.find((a) => a.isGod)?.name);
+        const lines = pickExchange(character, Math.floor(Math.random() * 1e6), bossName);
+        rt.brk.chat = {
+          lines, partnerId, conversationId: `${id}:${partnerId}:${Date.now()}`,
+          idx: 0, inFlight: false
+        };
         prt.brk.chattingWith = id;
         return true;
+      };
+
+      const finishCafeChat = (owner: Runtime, chat: CafeChat): void => {
+        if (owner.brk?.chat !== chat) return;
+        const partner = runtimes.get(chat.partnerId);
+        if (partner?.brk?.chattingWith) partner.brk.chattingWith = undefined;
+        owner.brk.chat = undefined;
+      };
+
+      /** Queue exactly one beat. Its onEnd callback queues the next one, making
+       * real playback completion — including cancellation — the only clock for
+       * an exchange. No fixed visual timer can drift away from the voices. */
+      const playNextCafeBeat = (owner: Runtime, chat: CafeChat): void => {
+        if (chat.cancelled || owner.brk?.chat !== chat || chat.inFlight) return;
+        if (chat.idx >= chat.lines.length) { finishCafeChat(owner, chat); return; }
+        const current = chat.idx;
+        const speaker = current % 2 === 0 ? owner : runtimes.get(chat.partnerId);
+        if (!speaker?.brk || speaker.brk.phase !== 'lingering') {
+          finishCafeChat(owner, chat);
+          return;
+        }
+        chat.inFlight = true;
+        const utterance = speaker.character.say(chat.lines[current], {
+          priority: 'conversation',
+          conversationId: chat.conversationId,
+          beatIndex: current,
+          pan: speechPan(speaker),
+          onStart: (durationMs) => {
+            // Both avatars stay at the table until this real clip completes.
+            if (owner.brk?.chat !== chat) return;
+            const hold = durationMs / 1000 + 1;
+            owner.brk.timer = Math.max(owner.brk.timer, hold);
+            const partner = runtimes.get(chat.partnerId);
+            if (partner?.brk) partner.brk.timer = Math.max(partner.brk.timer, hold);
+          },
+          onEnd: () => {
+            if (chat.cancelled || owner.brk?.chat !== chat || chat.idx !== current) return;
+            chat.inFlight = false;
+            chat.idx = current + 1;
+            playNextCafeBeat(owner, chat);
+          }
+        });
+        if (!utterance && owner.brk?.chat === chat && chat.idx === current) {
+          chat.inFlight = false;
+          finishCafeChat(owner, chat);
+        }
       };
 
       // Free a café seat and tidy up any conversation links so neither agent is
@@ -647,12 +744,21 @@ export function OfficeFloor() {
       const releaseBreak = (rt: Runtime): void => {
         if (!rt.brk) return;
         if (rt.brk.chat) {
-          const p = runtimes.get(rt.brk.chat.partnerId);
+          const chat = rt.brk.chat;
+          chat.cancelled = true;
+          rt.brk.chat = undefined;
+          const p = runtimes.get(chat.partnerId);
           if (p?.brk) p.brk.chattingWith = undefined;
+          officeAudio.cancelConversation(chat.conversationId);
         }
         if (rt.brk.chattingWith) {
           const o = runtimes.get(rt.brk.chattingWith);
-          if (o?.brk) o.brk.chat = undefined;
+          const chat = o?.brk?.chat;
+          if (chat) {
+            chat.cancelled = true;
+            o!.brk!.chat = undefined;
+            officeAudio.cancelConversation(chat.conversationId);
+          }
         }
         cafeTaken[rt.brk.spotIdx] = null;
         rt.brk = undefined;
@@ -745,24 +851,10 @@ export function OfficeFloor() {
           }
           // lingering
           if (b.chat) {
-            // Play the conversation one beat at a time, alternating speakers.
-            b.chat.beat -= dt;
-            if (b.chat.beat <= 0) {
-              if (b.chat.idx < b.chat.lines.length) {
-                const speaker = (b.chat.idx % 2 === 0) ? rt : runtimes.get(b.chat.partnerId);
-                speaker?.character.showThought(b.chat.lines[b.chat.idx]);
-                b.chat.idx++;
-                b.chat.beat = 2.4;                // seconds per line
-                b.timer = Math.max(b.timer, 3.5); // keep both around to finish
-                const prt = runtimes.get(b.chat.partnerId);
-                if (prt?.brk) prt.brk.timer = Math.max(prt.brk.timer, 3.5);
-              } else {
-                // Conversation over — release the partner and resume solo quips.
-                const prt = runtimes.get(b.chat.partnerId);
-                if (prt?.brk) prt.brk.chattingWith = undefined;
-                b.chat = undefined;
-              }
-            }
+            if (!b.chat.inFlight) playNextCafeBeat(rt, b.chat);
+            continue; // the audio handle, not the break timer, owns this beat
+          } else if (b.chattingWith) {
+            continue; // the initiator owns and advances the shared exchange
           } else if (!b.chattingWith) {
             // Not in a conversation (and not being spoken to) — swap a solo quip.
             b.quipTimer -= dt;
@@ -1401,6 +1493,11 @@ export function OfficeFloor() {
           spawnTile: entrance, // walk in from the office door
           glowColor: hexNum(colors.accent[agent.accent]) ?? hexToNumber(member.shirt),
           onClick: (id) => useStore.getState().select(id),
+          // Speaking identity: the roster character picks the voice, and the
+          // coordinator is excluded from floor speech entirely (he talks
+          // through the realtime session instead).
+          characterName: charName as OfficeCharacterName,
+          isGod: !!agent.isGod,
         });
         character.show(charLayer);
         const rt: Runtime = { character, seatIndex, waitTile, charName };
@@ -1423,6 +1520,7 @@ export function OfficeFloor() {
       const removeCharacter = (id: string) => {
         const rt = runtimes.get(id);
         if (!rt) return;
+        officeAudio.cancelAgent(id);
         releaseBreak(rt);                // free any café seat it was holding
         releaseErrand(rt);               // and any idle errand it was running
         releaseRun(rt);                  // and any coffee run in progress
@@ -1627,7 +1725,19 @@ export function OfficeFloor() {
       // this method) degrades to "no envelopes" rather than crashing the floor.
       const offMessage = window.cth.onHiveMessage
         ? window.cth.onHiveMessage((e) => {
-            for (const target of e.targets) spawnHandoff(e.from, target, e.act, e.needsHuman);
+            if (!isConfirmedHiveDelivery(e)) return;
+            for (const target of e.deliveredTargets) spawnHandoff(e.from, target, e.act, e.needsHuman);
+            const cue = hiveSpeech.accept(e);
+            if (!cue) return;
+            const speaker = runtimes.get(cue.agentId);
+            if (!speaker) return;
+            speaker.character.say(cue.text, {
+              priority: cue.priority,
+              conversationId: cue.conversationId,
+              beatIndex: cue.beatIndex,
+              pan: speechPan(speaker),
+              onStart: () => hiveSpeech.markSpoken(cue.eventId)
+            });
           })
         : () => { /* onHiveMessage unavailable — real handoffs disabled this session */ };
       // Demo path: with no live hive, the mock loop dispatches synthetic handoffs
@@ -1761,6 +1871,7 @@ export function OfficeFloor() {
         (a as any).__resize?.disconnect?.();
         try { (a as any).__unsub?.(); } catch { /* noop */ }
         try { (a as any).__offMessage?.(); } catch { /* noop */ }
+        for (const id of runtimes.keys()) officeAudio.cancelAgent(id);
         try { clearInterval((a as any).__taskBoardPoll); } catch { /* noop */ }
         safeDestroy(a);
       }

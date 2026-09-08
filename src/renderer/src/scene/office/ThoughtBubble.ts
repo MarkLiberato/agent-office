@@ -45,6 +45,8 @@ export class ThoughtBubble {
   private state: BubbleState = 'hidden';
   private fadeElapsed = 0;
   private lingerElapsed = 0;
+  /** performance.now() before which the bubble refuses to fade (spoken audio). */
+  private holdUntil = 0;
   private bgW = 0;
   private bgH = 0;
   private isThinking = false;
@@ -101,6 +103,9 @@ export class ThoughtBubble {
   /** Show the current activity. Empty text → an animated "…" (model thinking).
    *  `tool` (an agent's `carrying`) prefixes a small glyph when present. */
   show(text: string, tool?: string): void {
+    // A new line starts a new hold; the previous line's audio must not keep
+    // this bubble pinned open.
+    this.holdUntil = 0;
     this.isThinking = !text.trim();
     if (this.isThinking) {
       this.dotsElapsed = 0;
@@ -137,6 +142,15 @@ export class ThoughtBubble {
     if (this.state === 'hidden') return;
     this.state = 'lingering';
     this.lingerElapsed = 0;
+  }
+
+  /** Hold this bubble open for at least `ms` — the agent is still SAYING the
+   *  line. Without this the cloud can fade while the voice is mid-sentence,
+   *  because the bubble's linger is timed off the scene, not off the audio. */
+  holdFor(ms: number): void {
+    if (!(ms > 0)) return;
+    this.holdUntil = Math.max(this.holdUntil, performance.now() + ms);
+    if (this.state === 'lingering') this.lingerElapsed = 0;
   }
 
   /** Update for the camera zoom: keep the bubble's SCREEN size from dropping
@@ -229,6 +243,8 @@ export class ThoughtBubble {
         break;
       }
       case 'lingering': {
+        // The spoken line outranks the scene's linger timer.
+        if (performance.now() < this.holdUntil) { this.lingerElapsed = 0; break; }
         this.lingerElapsed += dt;
         if (this.lingerElapsed >= LINGER_DURATION) {
           this.state = 'fading-out';

@@ -1,15 +1,9 @@
-appId: in.munderdiffl.app
-productName: Munder Difflin
+appId: local.officeagent.app
+productName: Office Agent
 copyright: Copyright © 2026 Chaitanya Giri
 
-# Where electron-updater looks for new versions (latest*.yml + assets on GitHub
-# releases). The release workflow still uploads assets itself (--publish never);
-# this block only stamps app-update.yml into the packaged app so the updater
-# knows which repo to poll.
-publish:
-  provider: github
-  owner: chaitanyagiri
-  repo: munder-difflin
+# Local derivative: no upstream update or publishing feed.
+publish: null
 
 # Bake the update toast's "What's new" list straight into latest*.yml.
 #
@@ -35,12 +29,7 @@ releaseInfo:
 # (the hook no-ops otherwise, so contributor builds still work). Root-level hook.
 afterSign: build/notarize.cjs
 
-# Register the munderdifflin:// URL scheme (shareable-hires deep link) in the
-# packaged app: CFBundleURLTypes on macOS, registry entries via NSIS on Windows.
-protocols:
-  - name: Munder Difflin
-    schemes:
-      - munderdifflin
+# Do not claim the upstream application URL protocol.
 
 # electron-vite emits the app into out/; package exactly that plus what the
 # runtime needs. node-pty is native, so keep it out of the asar.
@@ -75,14 +64,21 @@ extraResources:
   # repo resources/skills). Directory copy preserves the <id>/SKILL.md tree.
   - from: resources/skills
     to: skills
+  # Kokoro-82M TTS weights for the office floor voices. The renderer's synth
+  # worker loads these through the office-tts:// protocol registered in main
+  # (src/main/ttsProtocol.ts), so they must live OUTSIDE the asar. Fetched by
+  # tools/fetch-voices.cjs during setup; never committed.
+  - from: resources/tts
+    to: tts
 
 asarUnpack:
   - "**/node_modules/node-pty/**"
   # better-sqlite3 is native (bindings/prebuild need the .node on the real FS).
   - "**/node_modules/better-sqlite3/**"
 
-# Rebuild native deps (node-pty) for the target during packaging.
-npmRebuild: true
+# setup-native.cjs verifies Electron SQLite and the node-pty NAPI prebuilt.
+# Rebuilding node-pty here would unnecessarily require Windows Spectre libraries.
+npmRebuild: false
 
 # ---- macOS ----
 mac:
@@ -92,15 +88,15 @@ mac:
   # the privacy prompt and, for a signed app, remembers the grant — so the user
   # is asked ONCE instead of on every agent action.
   extendInfo:
-    NSDocumentsFolderUsageDescription: "Munder Difflin runs your Claude Code agents, which read and write files in the project folders you point them at."
-    NSDesktopFolderUsageDescription: "Munder Difflin's agents may work on projects located on your Desktop."
-    NSDownloadsFolderUsageDescription: "Munder Difflin's agents may work on projects located in your Downloads."
-    NSRemovableVolumesUsageDescription: "Munder Difflin's agents may work on projects located on external volumes."
-    NSNetworkVolumesUsageDescription: "Munder Difflin's agents may work on projects located on network volumes."
+    NSDocumentsFolderUsageDescription: "Office Agent runs your Claude Code agents, which read and write files in the project folders you point them at."
+    NSDesktopFolderUsageDescription: "Office Agent's agents may work on projects located on your Desktop."
+    NSDownloadsFolderUsageDescription: "Office Agent's agents may work on projects located in your Downloads."
+    NSRemovableVolumesUsageDescription: "Office Agent's agents may work on projects located on external volumes."
+    NSNetworkVolumesUsageDescription: "Office Agent's agents may work on projects located on network volumes."
     # The microphone is used by two opt-in, off-by-default voice features: Free
     # Flow dictation (Groq transcription) and Realtime Michael (live voice chat
     # with the orchestrator via OpenAI). Mic access only happens while one is on.
-    NSMicrophoneUsageDescription: "Munder Difflin uses your microphone only for its opt-in voice features: Free Flow dictation (transcribed by Groq into the message queue) and talking to Michael in real time (streamed to OpenAI). The mic is off unless you turn one of these on."
+    NSMicrophoneUsageDescription: "Office Agent uses your microphone only for its opt-in voice features: Free Flow dictation (transcribed by Groq into the message queue) and talking to Michael in real time (streamed to OpenAI). The mic is off unless you turn one of these on."
   # Hardened runtime + entitlements so the spawned `claude` agents inherit this
   # app's TCC responsibility (one grant covers them all) and node-pty can load.
   hardenedRuntime: true
@@ -130,10 +126,10 @@ mac:
       arch: [universal]
     - target: zip
       arch: [universal]
-  artifactName: Munder-Difflin-${version}-mac-${arch}.${ext}
+  artifactName: Office-Agent-${version}-mac-${arch}.${ext}
 
 dmg:
-  title: Munder Difflin ${version}
+  title: Office Agent ${version}
 
 # ---- Windows ----
 win:
@@ -148,11 +144,11 @@ nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
-  artifactName: Munder-Difflin-${version}-win-x64-setup.exe
-  shortcutName: Munder Difflin
+  artifactName: Office-Agent-${version}-win-x64-setup.exe
+  shortcutName: Office Agent
 
 portable:
-  artifactName: Munder-Difflin-${version}-win-x64-portable.exe
+  artifactName: Office-Agent-${version}-win-x64-portable.exe
 
 # ---- Linux ----
 linux:
@@ -161,4 +157,4 @@ linux:
   target:
     - target: AppImage
       arch: [x64]
-  artifactName: Munder-Difflin-${version}-linux-x86_64.AppImage
+  artifactName: Office-Agent-${version}-linux-x86_64.AppImage

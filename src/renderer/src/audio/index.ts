@@ -1,12 +1,16 @@
 // One singleton the scene talks to. Everything above this file is testable in
 // isolation; this is the only place they are wired together.
+//
+// The speech half lives in officeSpeech.ts so it can be loaded under
+// `node --test` — this file imports ambience.ts, whose `import.meta.glob` cannot
+// be transpiled to CommonJS.
 
 import { KokoroProvider, type TtsProvider } from './ttsEngine';
 import { Mixer } from './mixer';
 import { Ambience, type AmbienceEvent } from './ambience';
-import { SpeechQueue, type SpeechRequest } from './speechQueue';
-import { voiceForAgent } from './voiceCast';
-import type { OfficeCharacterName } from '../scene/office/cast';
+import { OfficeSpeech, MIC_FADE_MS, type SpeakOptions } from './officeSpeech';
+
+export type { SpeakOptions } from './officeSpeech';
 
 export interface AudioConfig {
   master: number;
@@ -24,25 +28,14 @@ export const DEFAULT_AUDIO_CONFIG: AudioConfig = {
   ambienceVolume: 0.6
 };
 
-export interface SpeakOptions {
-  agentId: string;
-  character?: OfficeCharacterName | null;
-  isGod?: boolean;
-  text: string;
-  /** Called with the clip length once it starts, so the bubble can outlive it. */
-  onDuration?: (ms: number) => void;
-}
-
 export class OfficeAudio {
   private mixer: Mixer | null = null;
   private provider: TtsProvider | null = null;
   private ambience: Ambience | null = null;
-  private queue: SpeechQueue | null = null;
-  private availableVoices: string[] = [];
+  private speech: OfficeSpeech | null = null;
   private config: AudioConfig = { ...DEFAULT_AUDIO_CONFIG };
   private starting: Promise<void> | null = null;
-  private pumping = false;
-  private readonly durationCallbacks = new Map<string, (ms: number) => void>();
+  private readonly micOwners = new Set<string>();
 
   /** Safe to call repeatedly; the model is loaded once. */
   init(): Promise<void> {
@@ -51,21 +44,25 @@ export class OfficeAudio {
   }
 
   private async start(): Promise<void> {
-    this.mixer = new Mixer();
-    this.ambience = new Ambience(this.mixer);
-    this.queue = new SpeechQueue(() => Date.now());
-    this.applyConfig(this.config);
-
+    const mixer = new Mixer();
+    this.mixer = mixer;
+    this.ambience = new Ambience(mixer);
     this.provider = new KokoroProvider();
+    this.speech = new OfficeSpeech({ mixer, provider: this.provider });
+    this.applyConfig(this.config);
+    // A microphone may have opened while the model was loading.
+    for (const owner of this.micOwners) void this.speech.silence(MIC_FADE_MS, owner);
+
     try {
       // Pay the model-load cost now so the first real quip is not seconds late.
       await this.provider.warm();
-      this.availableVoices = await this.provider.voices();
+      this.speech.setAvailableVoices(await this.provider.voices());
     } catch (err) {
       // A missing or broken model must not take the office floor down with it:
       // the room keeps its ambience and the agents simply stay quiet.
       console.warn('[audio] TTS unavailable, agents will not speak:', err);
       this.provider = null;
+      this.speech.setProvider(null);
     }
   }
 
@@ -74,13 +71,14 @@ export class OfficeAudio {
     this.mixer?.setMaster(cfg.master);
     this.mixer?.setSpeechVolume(cfg.speechVolume);
     this.mixer?.setAmbienceVolume(cfg.ambienceVolume);
-    if (cfg.ambience) void this.ambience?.start();
+    this.speech?.setEnabled(cfg.speech);
+    if (cfg.ambience && this.micOwners.size === 0) void this.ambience?.start();
     else this.ambience?.stop();
   }
 
   /** Mute the whole floor — used for the entire realtime coordinator session. */
   setMuted(muted: boolean): void {
-    this.queue?.setMuted(muted);
+    this.speech?.setMuted(muted);
   }
 
   setActivity(n: number): void {
@@ -91,48 +89,36 @@ export class OfficeAudio {
     this.ambience?.trigger(kind);
   }
 
-  speak(opts: SpeakOptions): void {
-    if (!this.config.speech || !this.queue || !this.provider) return;
-    const voiceId = voiceForAgent({
-      character: opts.character ?? null,
-      agentId: opts.agentId,
-      isGod: opts.isGod,
-      available: this.availableVoices.length ? this.availableVoices : undefined
-    });
-    if (!voiceId) return;                        // the god speaks elsewhere
-    const req: SpeechRequest = { agentId: opts.agentId, text: opts.text, voiceId, at: Date.now() };
-    if (opts.onDuration) this.durationCallbacks.set(`${req.agentId}|${req.text}`, opts.onDuration);
-    this.queue.enqueue(req);
-    void this.pump();
+  /** Ask an agent to say a line. Returns its utterance id, or null if refused. */
+  speak(opts: SpeakOptions): string | null {
+    return this.speech?.speak(opts) ?? null;
   }
 
-  private async pump(): Promise<void> {
-    if (this.pumping || !this.queue || !this.provider || !this.mixer) return;
-    this.pumping = true;
-    try {
-      for (;;) {
-        const req = this.queue.next();
-        if (!req) return;
-        try {
-          const result = await this.provider.synth(req.text, req.voiceId);
-          const play = await this.mixer.playSpeech(result);
-          const ms = play.durationMs;
-          this.queue.markSpoken(req, ms);
-          const key = `${req.agentId}|${req.text}`;
-          this.durationCallbacks.get(key)?.(ms);
-          this.durationCallbacks.delete(key);
-          // Wait out the clip before considering the next line.
-          await new Promise((r) => setTimeout(r, ms));
-        } catch (err) {
-          // A failed line must never wedge the floor: charge the agent for it
-          // and move on to the next one.
-          console.warn('[audio] line failed:', err);
-          this.queue.markSpoken(req, 0);
-        }
-      }
-    } finally {
-      this.pumping = false;
-    }
+  cancelConversation(conversationId: string): void {
+    this.speech?.cancelConversation(conversationId);
+  }
+
+  cancelAgent(agentId: string): void {
+    this.speech?.cancelAgent(agentId);
+  }
+
+  /** Await this BEFORE getUserMedia, always. Speech and ambience are faded out
+   *  within 100 ms, pending chatter is dropped, and the promise resolves only
+   *  once the floor is actually silent. */
+  async silenceForMic(owner = 'default'): Promise<void> {
+    if (this.micOwners.has(owner)) return;
+    this.micOwners.add(owner);
+    await this.ambience?.fadeStop(MIC_FADE_MS);
+    await this.speech?.silence(MIC_FADE_MS, owner);
+  }
+
+  /** The microphone is closed. Nothing that was dropped comes back. */
+  resumeAfterMic(owner = 'default'): void {
+    if (!this.micOwners.delete(owner)) return;
+    this.speech?.release(owner);
+    if (this.micOwners.size > 0) return;
+    this.mixer?.setAmbienceVolume(this.config.ambienceVolume);
+    if (this.config.ambience) void this.ambience?.start();
   }
 }
 

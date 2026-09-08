@@ -54,8 +54,23 @@ export interface KnowledgeGraphConfig {
   rootPath?: string;
 }
 
+/** Office floor audio: the agents' spoken thought bubbles (local Kokoro TTS) and
+ *  the room's ambience bed. Mirrors src/main/config.ts — keep the two in sync. */
+export interface AudioSettings {
+  /** Overall output level, 0..1, applied to speech and ambience together. */
+  master: number;
+  /** Do agents say their thought bubbles out loud? */
+  speech: boolean;
+  speechVolume: number;
+  /** Room tone plus incidental office noises (keys, phone, coffee machine). */
+  ambience: boolean;
+  ambienceVolume: number;
+}
+
 export interface HarnessConfig {
   onboardingComplete: boolean;
+  /** Floor audio (voices + ambience). Mirrors src/main/config.ts. */
+  audio?: AudioSettings;
   /** Self-identified audience from the first onboarding screen ('technical' vs
    *  'non-technical') — drives the copy register across onboarding. Mirrors
    *  src/main/config.ts. */
@@ -72,8 +87,8 @@ export interface HarnessConfig {
   defaultCommand: string;
   /** Default model for newly spawned agents (e.g. 'claude-sonnet-4-6[1m]'); unset = CLI default. */
   defaultModel?: string;
-  /** Which provider+model powers the GOD orchestrator ("Michael"). Default
-   *  'claude' / 'claude-opus-4-8'. Mirrors src/main/config.ts. */
+  /** Which provider+model powers the GOD orchestrator ("Michael"). Defaults to
+   *  Codex with its configured CLI model. Mirrors src/main/config.ts. */
   godProvider?: AgentProvider;
   godModel?: string;
   /** Per-server consent for the default MCP bundle, keyed by catalog id (mirrors
@@ -90,9 +105,9 @@ export interface HarnessConfig {
    *  while away (battery cost; best on AC). Default off = survive + catch up on
    *  resume. Mirrors the main-process field (src/main/config.ts). */
   strongKeepalive?: boolean;
-  /** Auto-update from GitHub releases (default ON; Settings → General). */
+  /** Upstream auto-update is disabled in this local fork. */
   autoUpdate?: boolean;
-  /** Anonymous product analytics (default ON, opt-out; see TELEMETRY.md).
+  /** Anonymous product analytics (disabled in this local fork).
    *  Mirrors the main-process field (src/main/config.ts). */
   telemetryEnabled?: boolean;
   slackEnabled?: boolean;
@@ -402,24 +417,17 @@ export function decodeProviderModel(value: string): {
 }
 
 /** Build the command line to feed into spawnPty, honoring the provider's flags,
- *  autoMode, and an optional per-agent model override. Claude keeps the user's
- *  configured `defaultCommand`; other providers use their preset binary so the
- *  app works without Claude installed. */
+ *  autoMode, and an optional per-agent model override. Reuse a configured
+ *  command only for its matching provider (or an explicit custom provider). */
 export function buildSpawnCommand(
   config: Pick<HarnessConfig, 'defaultCommand' | 'autoMode'>,
   model?: string,
   provider: AgentProvider = inferAgentProvider(config.defaultCommand)
 ): string {
   const preset = providerPreset(provider);
-  // Claude keeps the user's configured defaultCommand; custom falls back to it
-  // too; every other provider (codex, grok, kimi, agy) uses its preset binary so the app
-  // works even without Claude installed.
-  const base =
-    provider === 'claude'
-      ? config.defaultCommand || preset.defaultCommand
-      : provider === 'custom'
-        ? config.defaultCommand || ''
-        : preset.defaultCommand;
+  const useConfigured = provider === 'custom'
+    || (!!config.defaultCommand && inferAgentProvider(config.defaultCommand) === provider);
+  const base = useConfigured ? config.defaultCommand || preset.defaultCommand : preset.defaultCommand;
   let cmd = base;
   if (preset.supportsModel && model && preset.modelFlag) {
     // Quote model values that contain whitespace (agy labels like

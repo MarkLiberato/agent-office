@@ -31,18 +31,25 @@ async function floor(t, opts = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'md-winprompt-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const hive = new HiveManager(() => home);
+  const isGod = opts.isGod !== false;
+  const id = isGod ? 'god-1' : 'worker-1';
   const inj = await hive.ensureAgent(
-    { id: 'god-1', name: 'Michael', provider: opts.provider ?? 'claude', cwd: home, isGod: true },
+    { id, name: 'Michael', provider: opts.provider ?? 'claude', cwd: home, isGod },
     { semanticMemory: true, knowledgeGraph: true, kgCliPath: KG_CLI, ...(opts.injectOpts ?? {}) }
   );
-  return { home, hive, inj, dir: path.join(home, 'hive', 'agents', 'god-1'), root: path.join(home, 'hive') };
+  return { home, hive, inj, dir: path.join(home, 'hive', 'agents', id), root: path.join(home, 'hive') };
 }
 
-/** The injected system prompt, whichever flag this provider carries it on. */
+/** The injected system prompt, wherever this agent's provider carries it.
+ *  Workers take it on argv. The coordinator takes it as `seedPrompt` instead:
+ *  opening the office must not submit an AI turn of its own, so its protocol
+ *  travels with the first user request rather than on the spawn command line.
+ *  The text is identical either way, which is what these checks are about. */
 function promptOf(inj) {
   const i = inj.args.findIndex((a) => a === '--append-system-prompt' || a === '--prompt');
-  assert.ok(i >= 0, 'the hive protocol must be on argv');
-  return inj.args[i + 1];
+  if (i >= 0) return inj.args[i + 1];
+  assert.ok(inj.seedPrompt, 'the hive protocol must be on argv or in seedPrompt');
+  return inj.seedPrompt;
 }
 
 test('no POSIX shell variables survive into agent-facing text', async (t) => {
@@ -108,7 +115,10 @@ test('the Stop-hook drain text uses native separators too', async (t) => {
 });
 
 test('the injected prompt survives the Windows ARRAY argv path byte for byte', async (t) => {
-  const { inj } = await floor(t);
+  // A worker: argv is the delivery path this test exists to protect, and only
+  // the coordinator is held back from it.
+  const { inj } = await floor(t, { isGod: false });
+  assert.ok(inj.args.includes('--append-system-prompt'), 'a worker still takes it on argv');
   const prompt = promptOf(inj);
   // Sanity: this really is the hostile shape (cmd.exe truncates at the first
   // newline and reads the parens as block delimiters).
@@ -142,7 +152,7 @@ test('the OpenCode plugin lands in BOTH plugin/ and plugins/', async (t) => {
 });
 
 test('OpenCode carries the protocol on --prompt, so the argv fix is what delivers it', async (t) => {
-  const { inj } = await floor(t, { provider: 'opencode' });
+  const { inj } = await floor(t, { provider: 'opencode', isGod: false });
   assert.ok(inj.args.includes('--prompt'));
   assert.ok(promptOf(inj).includes('HIVE PROTOCOL'));
 });

@@ -35,27 +35,10 @@ export function shouldFollowTerminalOutput(viewportY: number, baseY: number): bo
   return baseY - viewportY <= 1;
 }
 
-/** How long an untouched draft on the prompt keeps blocking queue delivery.
- *
- * The block exists so automation can't fuse its text onto a half-written line.
- * It still has to expire, because the flag is set from KEYSTROKES and a TUI that
- * swallows keys for its own UI can leave it set while the prompt is visibly
- * empty — a phantom draft, which wedged the queue for the rest of the session.
- *
- * Half an hour, not a minute. The old 60s window fired while the user had merely
- * paused to think, and treating a real draft as abandoned is the expensive
- * mistake; leaving a queued message parked a while longer is the cheap one. When
- * it does fire, delivery simply types after the existing text (the two fuse into
- * one prompt) — automation never deletes what the user wrote. */
+/** Diagnostic age threshold only. Age never releases prompt ownership. */
 export const STALE_INPUT_MS = 1_800_000;
 
-/** How long an untouched picker keeps blocking queue delivery.
- * The picker latch is set when the user submits a bare `/model`-style command
- * and is cleared by an Enter, Escape or Ctrl-C typed into that terminal — so a
- * picker closed any other way leaves it set with no path back. Same half hour,
- * same reason: it is the user's menu, so wait a long time, then deliver. We
- * never send Escape ourselves; closing someone's open menu to make room for a
- * queued message is not ours to do. */
+/** Diagnostic age threshold only; an open menu remains owned by the user. */
 export const STALE_PICKER_MS = 1_800_000;
 
 export interface TerminalAutomationState {
@@ -67,7 +50,7 @@ export interface TerminalAutomationState {
   pickerOpenedAt?: number; // when the picker latched; absent ⇒ never expires
 }
 
-/** A picker nobody has interacted with for STALE_PICKER_MS is treated as gone. */
+/** Reports age for diagnostics; does not establish that a picker is closed. */
 export function isStaleTerminalPicker(
   state: TerminalAutomationState,
   now = Date.now()
@@ -80,7 +63,7 @@ export function isStaleTerminalPicker(
 /** Why automation may not own the prompt right now, or null when it may. */
 export type TerminalAutomationBlock = 'exited' | 'picker' | 'draft' | 'settling' | null;
 
-/** A draft nobody has touched for STALE_INPUT_MS is treated as abandoned. */
+/** Reports age for diagnostics; does not establish that a draft was cleared. */
 export function isStaleTerminalDraft(
   state: TerminalAutomationState,
   now = Date.now()
@@ -95,8 +78,10 @@ export function terminalAutomationBlock(
   now = Date.now()
 ): TerminalAutomationBlock {
   if (state.exited) return 'exited';
-  if (state.pickerOpen && !isStaleTerminalPicker(state, now)) return 'picker';
-  if (state.inputDirty && !isStaleTerminalDraft(state, now)) return 'draft';
+  // Time is not evidence that the user submitted a draft or closed a menu.
+  // Keep ownership until the terminal observes clearance or the user requests it.
+  if (state.pickerOpen) return 'picker';
+  if (state.inputDirty) return 'draft';
   if (now < state.settleUntil) return 'settling';
   return null;
 }

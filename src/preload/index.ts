@@ -14,6 +14,7 @@ import type { ModelCatalog } from '../shared/modelCatalogPayload';
 export type { ModelCatalog, CatalogModel } from '../shared/modelCatalogPayload';
 import type { HookEvent } from '../shared/hookEvents';
 export type { HookEvent } from '../shared/hookEvents';
+import type { HiveRouteEvent as SharedHiveRouteEvent } from '../shared/hiveRouteEvent';
 import type { LocalSkill, CatalogSkill } from '../main/skills';
 export type { LocalSkill, CatalogSkill } from '../main/skills';
 import type {
@@ -172,19 +173,8 @@ export interface HiveTask {
   webhook?: { tokenHash: string };
 }
 
-/** A message the router just delivered, with its resolved recipient ids. Drives
- *  the envelope-handoff animation on the office floor. `needsHuman` is set when
- *  the sender aimed at "human" (now routed to the god proxy) — cosmetic tint
- *  only; there is no approval queue. */
-export interface HiveRouteEvent {
-  id: string;
-  from: string;
-  to: string;
-  act: 'request' | 'inform' | 'propose' | 'query' | 'agree' | 'refuse' | 'done';
-  subject: string;
-  targets: string[];
-  needsHuman: boolean;
-}
+/** Content-free, confirmed-delivery metadata for renderer consumers. */
+export type HiveRouteEvent = SharedHiveRouteEvent;
 
 /** A direct hive message addressed to a provider that cannot drain hive inbox.
  *  The renderer turns this into a queued terminal work order for that agent. */
@@ -257,6 +247,15 @@ export interface CircuitBreakerConfig {
   tokenVelocityPerMin?: number;
 }
 
+/** Office floor audio. Mirrors main + renderer HarnessConfig. */
+export interface AudioSettings {
+  master: number;
+  speech: boolean;
+  speechVolume: number;
+  ambience: boolean;
+  ambienceVolume: number;
+}
+
 export interface HarnessConfig {
   onboardingComplete: boolean;
   /** Onboarding audience ('technical' | 'non-technical'); drives onboarding copy.
@@ -282,6 +281,9 @@ export interface HarnessConfig {
   opsStandupSeeded?: boolean;
   heartbeatSeeded?: boolean;
   notifications?: boolean;
+  /** Office floor audio (agent voices + ambience). Mirrors main + renderer
+   *  HarnessConfig so updateConfig({ audio }) is typed across the bridge. */
+  audio?: AudioSettings;
   /** Opt-in strong keep-alive (prevent-display-sleep). Mirrors main + renderer
    *  HarnessConfig so updateConfig({ strongKeepalive }) is typed across the bridge. */
   strongKeepalive?: boolean;

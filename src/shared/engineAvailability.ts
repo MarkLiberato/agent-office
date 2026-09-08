@@ -1,7 +1,7 @@
 /**
  * Can the engine a user is about to pick actually boot on this machine?
  *
- * The onboarding wizard records Michael's engine and nothing checks it until the
+ * The onboarding wizard records god's engine and nothing checks it until the
  * first spawn. spawnAgentCore then runs the install ladder (cliInstall.ts), and
  * for a provider with no `installCommand` and no `nativeInstallCommand` that
  * ladder ends at the `manual` rung: a hint is printed in a terminal and the
@@ -13,6 +13,7 @@
  */
 import type { AgentProvider } from './agentProvider';
 import type { ToolStatus } from './toolCatalog';
+import { resolveGodName } from './godIdentity';
 
 export type EngineAvailabilityState =
   /** The binary resolves on this machine. */
@@ -69,10 +70,15 @@ export function engineAvailabilityBadge(a: EngineAvailability): string | null {
 
 /** The explanation shown under the picker when the selected engine cannot boot.
  *  Written for someone who does not know what a CLI engine is: what happened,
- *  then what to do next. */
-export function engineAvailabilityMessage(a: EngineAvailability, label: string): string | null {
+ *  then what to do next. `godName` is the coordinator's live name — passed in so
+ *  the sentence names him instead of the upstream cast's hardcoded "Michael". */
+export function engineAvailabilityMessage(
+  a: EngineAvailability,
+  label: string,
+  godName?: string | null
+): string | null {
   if (a.state !== 'not-installable') return null;
   return `${label} is not installed on this computer and the app has no installer for it, ` +
-    `so Michael could not start. Install it first, then press "check again". ` +
+    `so ${resolveGodName(godName)} could not start. Install it first, then press "check again". ` +
     `Or pick Claude Code, which installs itself on first run.`;
 }

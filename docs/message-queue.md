@@ -74,29 +74,14 @@ delivery while any of these is true (`terminalAutomation.ts`):
 | Block | Set by | Cleared by |
 |---|---|---|
 | `exited` | the PTY died | respawn |
-| `picker` | you submitted a bare `/model`-style command that opens a menu | an Enter / Escape / Ctrl-C typed into that terminal, or expiry |
-| `draft` | you have unsubmitted text on the prompt | submitting or clearing it, or expiry |
+| `picker` | you submitted a bare `/model`-style command that opens a menu | an Enter / Escape / Ctrl-C typed into that terminal |
+| `draft` | you have unsubmitted text on the prompt | submitting or clearing it |
 | `settling` | a short repaint window after the line was freed | time |
 
-Both `picker` and `draft` expire after **30 minutes** (`STALE_PICKER_MS`,
-`STALE_INPUT_MS`). The expiry exists because both flags are inferred, not reported —
-a picker closed some way we can't observe, or a draft flag left set by a TUI that
-swallowed keys, would otherwise wedge that agent's MD queue for the rest of the
-session.
-
-Two rules about what happens when a block expires:
-
-- **Automation never erases your text.** Expiry means the queued message is typed
-  *after* whatever is on the line; the two fuse into one prompt. An earlier version
-  sent Ctrl-U first, which silently destroyed real drafts that had merely been left
-  alone for a minute.
-- **Automation never closes your menu.** We do not send Escape at a picker. You may
-  have opened it deliberately and stepped away; taking it down to make room for a
-  queued message is not the harness's call, and we cannot verify that Escape worked
-  anyway. The composer has a button that does it — because then *you* asked.
-
-Both windows are long on purpose. Treating a live draft as abandoned is the
-expensive mistake; leaving a queued message parked a while longer is the cheap one.
+Draft and picker protection do not expire. Elapsed time cannot prove that the
+prompt is empty or a menu is closed. The composer exposes explicit clear/close
+controls if a terminal latch remains set; automation never merges queued text
+into a known draft or types into a known menu. Age helpers remain diagnostic only.
 
 ## 4. Reading the prompt instead of modelling it
 
@@ -116,8 +101,7 @@ never invent one.
 
 The asymmetry is the point, because the two mistakes don't cost the same. A wrong
 "empty" opens the gate and fuses a queued message onto what you're writing. A wrong
-"has text" only parks that message until the draft expires. So the cheap mistake is
-the one we allow to happen.
+"has text" parks that message until clearance is observed or explicitly requested.
 
 One case where the screen is not evidence at all: `inputDirty` is set the moment you
 press a key, but the character only reaches xterm's buffer after the PTY echoes it
@@ -137,16 +121,14 @@ It is not an agent status and is never stored on the agent — the PTY parser ow
 that field and would overwrite it. It is derived at render from the same draft
 detection the gate uses, so the badge is reporting the same draft the gate sees.
 
-It does **not** apply the 30-minute expiry the gate applies. Past that window the
-gate starts delivering while the badge still reads "your draft" — which is honest:
-your text really is still sitting on the prompt. The badge answers "is my text
-there", not "is the queue blocked".
+The badge and delivery gate use the same ownership rule; neither expires a draft
+just because the user stepped away.
 
 ## 6. Where the code lives
 
 | File | Role |
 |---|---|
-| `src/renderer/src/components/terminalAutomation.ts` | pure policy — blocks, expiry windows. No DOM, fully unit-tested (`test/terminal-automation.test.cjs`) |
+| `src/renderer/src/components/terminalAutomation.ts` | pure ownership policy. No DOM, unit-tested (`test/terminal-automation.test.cjs`) |
 | `src/renderer/src/components/terminalPool.ts` | the pooled xterm per PTY; buffer reads, latches, `isTerminalAutomationSafe`, `hasTerminalDraft` |
 | `src/renderer/src/hooks/useHive.ts` | effect #3 inbox nudge (enqueues), effect #4 drain (the one writer), effect #6 scheduled `/compact` |
 | `src/renderer/src/store/store.ts` | the MD queues themselves + agent persistence |

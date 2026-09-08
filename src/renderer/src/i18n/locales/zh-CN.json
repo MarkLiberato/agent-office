@@ -237,9 +237,9 @@
       "autoCompact": "定时自动压缩",
       "autoCompactDesc": "按计划为每个智能体排队执行 /compact（默认每小时；间隔在触发器标签页设置）。默认关闭——长期运行的智能体不开启可能会撑爆上下文。",
       "autoUpdate": "自动更新",
-      "autoUpdateDesc": "后台检查 GitHub 发布并下载更新；由你选择何时重启。绝不会自行重启。",
+      "autoUpdateDesc": "在此本地分支中已禁用。上游发布版本无法替换 Office Agent。",
       "telemetry": "匿名使用统计",
-      "telemetryDesc": "少量匿名事件（打开应用、生成智能体、使用功能）——绝不包含提示词、代码、路径或智能体输出。完整清单见 TELEMETRY.md。",
+      "telemetryDesc": "在此本地分支中已禁用。Office Agent 不会发送产品使用统计。",
       "language": "语言",
       "languageDesc": "选择应用界面的语言。默认英文。",
       "dangerZone": "危险区",
@@ -375,7 +375,17 @@
     "saved": "已保存",
     "saving": "保存中…",
     "unsavedChanges": "有未保存的更改",
-    "unsavedWarning": "你有未保存的设置。仍要关闭并放弃这些更改吗？"
+    "unsavedWarning": "你有未保存的设置。仍要关闭并放弃这些更改吗？",
+    "audio": {
+      "title": "办公室声音",
+      "master": "主音量",
+      "speech": "员工朗读想法",
+      "speechVolume": "语音音量",
+      "ambience": "办公室环境音",
+      "ambienceVolume": "环境音音量",
+      "speechHint": "员工会用各自的嗓音把想法气泡念出来。完全在本机离线运行。",
+      "ambienceHint": "房间底噪，外加偶尔的键盘声、电话铃、咖啡机和自动售货机的落物声。"
+    }
   },
   "commandCenter": {
     "title": "命令中心",
@@ -578,7 +588,7 @@
   },
   "onboarding": {
     "titles": {
-      "persona": "欢迎来到 MUNDER DIFFLIN",
+      "persona": "欢迎使用 OFFICE AGENT",
       "welcome": "认识你的办公室",
       "home": "第 1 步，共 4 步 · HARNESS 主目录",
       "homePlain": "第 1 步，共 4 步 · 为应用找一个家",
@@ -590,9 +600,9 @@
       "done": "全部就绪"
     },
     "persona": {
-      "headline": "一个 24/7 工作的你",
-      "body": "Munder Difflin 把你在用的 CLI 智能体变成你的克隆——一个经营着一屋子长期运行智能体、在你离开时持续工作的存在。它管理着围绕它们的一切：上下文、记忆、任务、触发器、环境、文件和集成。",
-      "bodyLocal": " 一切都在本机运行。",
+      "headline": "你的本地 AI 工作办公室",
+      "body": "Office Agent 把真实的 AI 终端搬进一间动画办公室。选择一个项目，给你的工人分配任务，然后查看他们的输出。它基于开源项目 Munder Difflin 构建，是一个独立的本地分支。",
+      "bodyLocal": " 应用及其记录都保存在这台电脑上。你选择的 AI 服务商会收到提示词和相关的任务上下文。",
       "ask": "首先——你是谁？（我们会据此定制设置）",
       "technicalTitle": "我是技术人员",
       "technicalDesc": "我写代码或用终端工作。给我看 CLI 命令、标志和模型 ID。",
@@ -602,7 +612,7 @@
     "welcome": {
       "headline": "你的克隆以及它经营的楼层",
       "descPlain": "你的克隆经营着一小间 AI 员工办公室，你可以在一个屏幕上看到一切。里面有什么：",
-      "desc": "你的克隆协调着一窝 AI 编程智能体——持久、可观察、全本地。里面有什么：",
+      "desc": "在一间动画本地办公室里协调真实的 AI 终端。任务由你选择的服务商执行。办公室里有这些：",
       "features": {
         "engines": {
           "label": "十一大引擎，一间办公室",
@@ -645,9 +655,9 @@
       "cursor": "Cursor Agent CLI —— 使用你的 Cursor 额度（Luna、Composer 等）"
     },
     "home": {
-      "descPlain": "为应用创建一个新的空文件夹作为家。应用记住的一切——它自己的设置和你智能体的记忆——都存放在这里。像 ~/HarnessAgents 这样的地方就很合适。如果它不存在，我们会为你创建。",
-      "desc": "选择一个文件夹，harness 会在其中存放自己的文件——智能体元数据、日志，以及你从这里创建的任何新仓库。像 ~/HarnessAgents 这样的地方就是个不错的默认选择。不存在的话我们会创建它。",
-      "placeholder": "/path/to/HarnessAgents",
+      "descPlain": "为智能体的记忆和项目记录选择一个文件夹。应用设置另行保存在本机的应用数据中。~/OfficeAgent 这样的路径就很合适；若不存在，我们会替你创建。",
+      "desc": "选择一个文件夹，让本工具存放自己的文件 —— 智能体元数据、日志，以及你从这里新建的仓库。~/OfficeAgent 是个不错的默认值。若不存在，我们会创建它。",
+      "placeholder": "~/OfficeAgent",
       "createPick": "创建 / 选择",
       "pick": "选择",
       "notePlain": "你日常不需要打开这个文件夹——它只是应用存放笔记的地方，这样重启时什么都不会丢。",
@@ -656,8 +666,8 @@
     "orchestrator": {
       "descPlain": "{{godName}} 就是你的克隆——他读取你的请求，拆成任务，分给合适的智能体。他是楼层的老板；而你仍然是他的老板。选择用什么 AI 引擎驱动他。",
       "desc": "{{godName}} 就是你的克隆——你刚认识的那层楼的老板。他分流你的请求、分配任务、管理团队，同时把真正需要你的情况升级上来。选择驱动他的引擎和模型；给他一个更长上下文、更强能力的模型。",
-      "cliAgentPlain": "一个<strong>CLI 智能体</strong>是运行在你电脑上的 AI 编程助手 —— 常见的有 Claude Code（Anthropic）、Codex（OpenAI）和 Antigravity（Google Gemini）。<strong>你的克隆体</strong>是常驻运行、打理整个办公室的那一个。我们推荐使用 Opus 4.8（1M）的 Claude Code。其他引擎之后可以随时添加或切换。",
-      "cliAgent": "每个选项都是一个<strong>CLI 引擎</strong>（Claude Code、Codex、Antigravity/Gemini，或本地代理如 Qwen）。标记为 INSTALLED 的引擎已在本机就绪；INSTALLS ON FIRST RUN 表示应用会在 {{godName}} 首次启动时进行安装。<strong>你的克隆体</strong>（{{godName}}）是统筹整个 hive 的引擎。推荐：Claude Code · Opus 4.8 · 1M。其他提供方之后可按智能体逐一接入。",
+      "cliAgentPlain": "<strong>CLI 智能体</strong>是在你电脑上拥有一个终端的 AI 助手。<strong>你的协调者</strong>使用你在这里选择的服务商。初始选中的是 Codex；可以沿用它已配置的模型，也可以在下面另选一个。当终端提示时，再登录你的服务商账号。",
+      "cliAgent": "每个选项都是一个 <strong>CLI 引擎</strong>。标记 INSTALLED 只表示在本机找到了该命令，并不代表已验证登录状态。<strong>你的协调者</strong>使用该服务商及其 CLI 默认模型，除非你另行指定。服务商登录在终端中完成。",
       "recommended": "推荐",
       "workersOnly": "仅限雇员",
       "workersOnlyHint": "暂时无法接收蜂巢邮件，因此不能运行你的分身——但雇佣工作智能体时仍然可用。",
@@ -677,14 +687,14 @@
       "autoLabelPlain": "让智能体自主工作",
       "autoLabel": "自主工作（自动模式）",
       "autoOnPlain": "开。智能体不停下来询问就执行任务——最顺畅的体验。",
-      "autoOffPlain": "关。智能体在改文件或运行命令前会暂停并询问你。",
-      "autoOn": "开。智能体从不暂停——Claude 运行 bypassPermissions，Codex 绕过批准 + 沙箱，等等。",
-      "autoOff": "关。每个智能体在编辑/执行 shell 命令前都会询问（Claude 默认，codex -a untrusted，…）。",
+      "autoOffPlain": "默认关闭。每个服务商使用各自正常的权限检查；请在终端中审阅这些请求。不同服务商的保护程度并不相同。",
+      "autoOn": "开启。使用所选引擎的自动化参数。部分服务商会绕过权限检查或沙箱；启动前请先查看该命令。",
+      "autoOff": "默认关闭。每个引擎都有自己的权限模型 —— Claude Code 在编辑文件和执行 shell 命令前会先询问；Codex 使用工作区写入权限，并在需要时请求批准。不同服务商之间不存在通用沙箱。",
       "autoNotePlain": "智能体在自己的项目里工作时效果最好。之后可以随时更改，包括针对单个智能体。",
-      "autoNote": "「控制室」体验的正确默认值；在生产仓库上是个坑。可在添加智能体对话框中按智能体覆盖。",
+      "autoNote": "保持关闭以便交互式审阅权限。你可以在“添加智能体”对话框中查看每个工人的命令。",
       "reliabilityHead": "你离开时保持一切运转",
-      "reliabilityDescPlain": "即使你离开，你的智能体也会按计划在实时终端中继续工作。这些设置让你保持知情，并让一切继续运转。",
-      "reliabilityDesc": "你的智能体会按计划在实时终端中继续工作。如果你的电脑完全休眠，这些定时器会暂停，等你回来再补上——什么都不会丢，只是可能跑得晚一些。",
+      "reliabilityDescPlain": "计划任务和后台 AI 工作默认关闭。你启动的任务可以在应用打开期间继续运行。这些可选设置用于控制通知与休眠。",
+      "reliabilityDesc": "计划任务和后台 AI 工作默认关闭。活动终端可能在应用打开期间继续运行。系统休眠可能暂停进程；恢复后请检查任务状态。",
       "keepAwake": "离开时保持工作",
       "keepAwakeDesc": "强保活：有智能体活跃时阻止电脑休眠，这样即使你离开，计划和终端也能准时触发。更耗电——最好接电源。默认关闭。",
       "notifications": "桌面通知",

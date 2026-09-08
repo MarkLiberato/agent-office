@@ -7,6 +7,8 @@
  * captions are status, not a job.
  */
 
+import { resolveGodName } from './godIdentity';
+
 const TRANSIENT_ROLE_RE = /^(on\s+)?standby$|^(idle|awaiting|paused|resumed|working|thinking|archived|starting up|reconnecting…?|running the floor|a fresh harness)$/i;
 
 export function isDurableRole(text: string | undefined | null): boolean {
@@ -35,15 +37,20 @@ export function preferredAgentRole(
 }
 
 /** Role to send on spawn/restart. Omit a transient roster caption so the hive
- *  registry can keep the last real hire role. */
+ *  registry can keep the last real hire role. `godName` is the coordinator's
+ *  live (persisted) name — passed in so the prep assistant's role names him
+ *  rather than a hardcoded default. */
 export function roleForHiveSpawn(agent: {
   description?: string;
   isGod?: boolean;
   isAssistant?: boolean;
-}): string | undefined {
+}, godName?: string | null): string | undefined {
   if (agent.isGod) return preferredAgentRole(agent.description, 'orchestrator (god)', true);
   if (agent.isAssistant) {
-    return preferredAgentRole(agent.description, "Michael's prep assistant");
+    // The assistant's role is read back by every agent in the LIVE ROSTER, so it
+    // must name the ACTUAL coordinator. Hardcoding the upstream cast's "Michael"
+    // here told the whole floor its boss was someone who does not exist.
+    return preferredAgentRole(agent.description, `${resolveGodName(godName)}'s prep assistant`);
   }
   const role = agent.description?.trim();
   return role && isDurableRole(role) ? role : undefined;

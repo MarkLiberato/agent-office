@@ -26,6 +26,8 @@ function harness(opts) {
   const flush = async () => { for (let i = 0; i < 50; i++) await Promise.resolve(); };
 
   async function advance(ms) {
+    // advance() moves the fake clock to the target before its final flush;
+    // await h.flush() after enqueueing work when asserting same-tick effects.
     const target = t + ms;
     for (;;) {
       let dueId = null;
@@ -72,7 +74,9 @@ function harness(opts) {
     priority: 'ambient',
     eligibleAt: 0,
     expiresAt: Number.MAX_SAFE_INTEGER,
-    pan: 0
+    pan: 0,
+    speed: 1,
+    gain: 1
   }, over || {});
 
   return { clock, sink, log, advance, flush, intent, at: () => t };

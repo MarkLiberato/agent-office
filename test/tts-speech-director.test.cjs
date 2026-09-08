@@ -86,3 +86,62 @@ test('a beat that arrives before its predecessor waits its turn', async () => {
   await h.advance(5000);
   assert.deepEqual(h.log.started.map((s) => s.id), ['b0', 'b1']);
 });
+
+test('a conversation beat outranks small talk that was waiting first', async () => {
+  const h = harness({ durations: { hold: 1000 } });
+  const d = new SpeechDirector(h.sink, h.clock);
+  d.enqueue(h.intent({ utteranceId: 'hold', agentId: 'z' }));          // occupies the floor
+  await h.flush();
+  // Let 'hold' finish before the other two arrive, so this exercises ordinary
+  // foreground selection, not the separate background-overlap feature — which
+  // would otherwise let 'chatter' (ambient, and therefore overlap-eligible)
+  // slip in under hold's tail before 'beat' is even enqueued.
+  await h.advance(1000);
+  d.enqueue(h.intent({ utteranceId: 'chatter', agentId: 'a', priority: 'ambient' }));
+  d.enqueue(h.intent({ utteranceId: 'beat', agentId: 'b', priority: 'conversation', conversationId: 'k', beatIndex: 0 }));
+  await h.advance(6000);
+  assert.deepEqual(h.log.started.map((s) => s.id), ['hold', 'beat', 'chatter']);
+});
+
+test('a reply queued from the previous beat onEnd still gets the tight gap', async () => {
+  const h = harness({ random: 0.5, durations: { b0: 1000, b1: 500 } });
+  const d = new SpeechDirector(h.sink, h.clock);
+  d.enqueue(h.intent({
+    utteranceId: 'b0', agentId: 'a', priority: 'conversation', conversationId: 'c', beatIndex: 0,
+    onEnd: () => {
+      // This is how the scene drives an exchange: the next beat is not queued
+      // until the previous one's audio has actually finished.
+      d.enqueue(h.intent({ utteranceId: 'b1', agentId: 'b', priority: 'conversation', conversationId: 'c', beatIndex: 1 }));
+    }
+  }));
+  await h.advance(6000);
+  const endOfFirst = h.log.ended.find((e) => e.id === 'b0').at;
+  const startOfReply = h.log.started.find((s) => s.id === 'b1').at;
+  const gap = startOfReply - endOfFirst;
+  assert.ok(gap >= DIRECTOR_LIMITS.replyGapMinMs && gap <= DIRECTOR_LIMITS.replyGapMaxMs,
+    `reply gap was ${gap}ms, expected the reply gap and not the ${DIRECTOR_LIMITS.socialGapMs}ms social one`);
+});
+
+test('throwing onStart does not orphan the real clip', async () => {
+  const h = harness({ durations: { first: 1000, second: 500 } });
+  const d = new SpeechDirector(h.sink, h.clock);
+  d.enqueue(h.intent({ utteranceId: 'first', onStart: () => { throw new Error('caption'); } }));
+  d.enqueue(h.intent({ utteranceId: 'second', agentId: 'b' }));
+  await h.advance(5000);
+  assert.deepEqual(h.log.started.map((s) => s.id), ['first', 'second']);
+  assert.equal(d.activeVoices, 0);
+});
+
+test('stopAll is quiescent when onEnd tries to refill the floor', async () => {
+  const h = harness({ durations: { first: 1000 } });
+  const d = new SpeechDirector(h.sink, h.clock);
+  d.enqueue(h.intent({ utteranceId: 'first', onEnd: () => {
+    d.enqueue(h.intent({ utteranceId: 'replacement' }));
+  }}));
+  await h.flush();
+  const stopped = d.stopAll();
+  await h.advance(1000);
+  await stopped;
+  assert.equal(d.pendingCount, 0);
+  assert.deepEqual(h.log.started.map((s) => s.id), ['first']);
+});

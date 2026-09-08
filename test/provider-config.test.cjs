@@ -20,6 +20,13 @@ const {
 
 const autoConfig = { defaultCommand: 'claude', autoMode: true };
 
+test('switching provider selects its executable and retains matching custom commands', () => {
+  assert.equal(buildSpawnCommand({ defaultCommand: 'codex', autoMode: false }, undefined, 'claude'), 'claude');
+  assert.equal(buildSpawnCommand({ defaultCommand: 'claude', autoMode: false }, undefined, 'codex'), 'codex');
+  assert.equal(buildSpawnCommand({ defaultCommand: 'claude --verbose', autoMode: false }, undefined, 'claude'), 'claude --verbose');
+  assert.equal(buildSpawnCommand({ defaultCommand: 'my-agent --local', autoMode: false }, undefined, 'custom'), 'my-agent --local');
+});
+
 test('Kimi is a first-class inferred provider with autonomous defaults', () => {
   assert.equal(isAgentProvider('kimi'), true);
   assert.equal(inferAgentProvider('kimi --auto'), 'kimi');

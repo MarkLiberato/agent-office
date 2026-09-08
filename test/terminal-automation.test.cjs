@@ -42,7 +42,7 @@ test('terminal automation waits for user drafts and interactive states', () => {
   assert.equal(canAutomateTerminal({ ...ready, settleUntil: 101 }, 100), false);
 });
 
-test('an abandoned draft stops blocking delivery once it goes stale', () => {
+test('an old draft keeps blocking delivery until submitted or cleared', () => {
   const typedAt = 1_000_000;
   const draft = {
     exited: false, pickerOpen: false, inputDirty: true,
@@ -51,14 +51,15 @@ test('an abandoned draft stops blocking delivery once it goes stale', () => {
   // Fresh draft: the user is mid-sentence, automation must not type over it.
   assert.equal(canAutomateTerminal(draft, typedAt + 1), false);
   assert.equal(isStaleTerminalDraft(draft, typedAt + 1), false);
-  // Untouched past the window: the queue must not stay wedged forever.
+  // Age alone cannot establish clearance of unsubmitted text.
   assert.equal(isStaleTerminalDraft(draft, typedAt + STALE_INPUT_MS), true);
-  assert.equal(canAutomateTerminal(draft, typedAt + STALE_INPUT_MS), true);
+  assert.equal(canAutomateTerminal(draft, typedAt + STALE_INPUT_MS), false);
+  assert.equal(canAutomateTerminal({ ...draft, inputDirty: false }, typedAt + STALE_INPUT_MS), true);
   // A draft with no timestamp keeps the old never-expires behavior.
   assert.equal(canAutomateTerminal({ ...draft, inputDirtyAt: undefined }, typedAt + 1e9), false);
 });
 
-test('an abandoned picker stops blocking delivery once it goes stale', () => {
+test('an old picker keeps blocking delivery until closed', () => {
   const openedAt = 1_000_000;
   const picker = {
     exited: false, pickerOpen: true, inputDirty: false,
@@ -68,11 +69,11 @@ test('an abandoned picker stops blocking delivery once it goes stale', () => {
   assert.equal(canAutomateTerminal(picker, openedAt + 1), false);
   assert.equal(isStaleTerminalPicker(picker, openedAt + 1), false);
   // The latch is cleared only by Enter/Escape/Ctrl-C typed into that terminal.
-  // A picker closed any other way left it set forever and the agent's queue
-  // never drained again, so the block HAS to expire.
+  // An old timestamp alone is not evidence that a menu was closed.
   assert.equal(isStaleTerminalPicker(picker, openedAt + STALE_PICKER_MS), true);
-  assert.equal(canAutomateTerminal(picker, openedAt + STALE_PICKER_MS), true);
-  assert.equal(terminalAutomationBlock(picker, openedAt + STALE_PICKER_MS), null);
+  assert.equal(canAutomateTerminal(picker, openedAt + STALE_PICKER_MS), false);
+  assert.equal(terminalAutomationBlock(picker, openedAt + STALE_PICKER_MS), 'picker');
+  assert.equal(canAutomateTerminal({ ...picker, pickerOpen: false }, openedAt + STALE_PICKER_MS), true);
   // No timestamp ⇒ the old never-expires behavior, so nothing silently changes
   // for a state recorded before this field existed.
   assert.equal(canAutomateTerminal({ ...picker, pickerOpenedAt: undefined }, openedAt + 1e9), false);
@@ -92,7 +93,7 @@ test('automation block reports why delivery is held', () => {
   );
 });
 
-test('the user owns the prompt for a long time before automation takes it', () => {
+test('elapsed time never transfers ownership of a draft or picker', () => {
   // Half an hour, both blocks. A 60s window fired while the user had merely
   // paused to think; treating a live draft as abandoned is the expensive
   // mistake, and parking a queued message a while longer is the cheap one.
@@ -108,11 +109,10 @@ test('the user owns the prompt for a long time before automation takes it', () =
   assert.equal(canAutomateTerminal(draft, at + 600_000), false);
   assert.equal(canAutomateTerminal(picker, at + 600_000), false);
 
-  // Past the window delivery proceeds — it types AFTER whatever is on the line
-  // (the two fuse into one prompt). Automation never erases the user's text and
-  // never closes the user's menu, so there is nothing to undo either way.
-  assert.equal(canAutomateTerminal(draft, at + STALE_INPUT_MS), true);
-  assert.equal(canAutomateTerminal(picker, at + STALE_PICKER_MS), true);
+  for (const elapsed of [STALE_INPUT_MS, 86_400_000, 1e9]) {
+    assert.equal(canAutomateTerminal(draft, at + elapsed), false);
+    assert.equal(canAutomateTerminal(picker, at + elapsed), false);
+  }
 });
 
 test('terminal output follows only when already at the bottom', () => {

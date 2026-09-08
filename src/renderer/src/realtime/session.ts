@@ -28,6 +28,7 @@ import { RealtimeAgent, RealtimeSession, OpenAIRealtimeWebRTC } from '@openai/ag
 import { realtimeReadTools, realtimeSessionSummary } from './tools';
 import { realtimeActionTools } from './actions';
 import { resetRealtimeCost, recordRealtimeUsage, endRealtimeCost, isRealtimeIdle, getRealtimeCostSnapshot } from './costStore';
+import { resolveGodName } from '@shared/godIdentity';
 
 /**
  * Voice-loop state machine:
@@ -58,25 +59,43 @@ export interface RealtimeMichaelState {
 /** Voices for gpt-realtime-2 (board: Cedar / Marin). god finalizes in rt-6. */
 const REALTIME_VOICE = 'cedar';
 
-/** Warm openers Michael leads with the moment a voice session connects, so he
- *  greets the user instead of sitting in silence waiting for them to speak. One
- *  is picked at random per connect so the greeting varies. Hardcoded constants
- *  (never user/external text) — safe to speak verbatim, no sanitization needed. */
-const GREETINGS = [
-  "Hi, what's up?",
-  "Hey, how's it going?",
-  "Hello, how can I help you?",
-  "Hey there, Michael here — what can I do for you?",
-  "Hi! What are we working on today?",
-  "Hey, good to hear you. What's on your mind?",
-  "Hello! What do you need?",
-  "Hey, I'm all ears — what's going on?"
-];
+/** Warm openers the orchestrator leads with the moment a voice session connects,
+ *  so he greets the user instead of sitting in silence waiting for them to speak.
+ *  One is picked at random per connect so the greeting varies. Built from
+ *  hardcoded constants plus god's own resolved name (never user/external text) —
+ *  safe to speak verbatim, no sanitization needed. */
+function greetings(godName: string): string[] {
+  return [
+    "Hi, what's up?",
+    "Hey, how's it going?",
+    "Hello, how can I help you?",
+    `Hey there, ${godName} here — what can I do for you?`,
+    "Hi! What are we working on today?",
+    "Hey, good to hear you. What's on your mind?",
+    "Hello! What do you need?",
+    "Hey, I'm all ears — what's going on?"
+  ];
+}
 
-/** Michael's voice persona (rt-6 — the final Phase-1 instructions, authored by god). Michael
- *  is READ-ONLY: he reports on the hive via the rt-4 read-tools but takes no actions yet. */
-const MICHAEL_PERSONA =
-  `You are Michael — the voice of the orchestrator ("god") of a hive of autonomous Claude coding agents. The person you're talking to is the human who runs the hive; treat them as the boss you're briefing.
+/** God's live display name for the voice loop. Resolved ONCE per connect (the
+ *  persona is prompt-cached, so it must not change mid-session) and falls back to
+ *  the app default when the registry can't be read. Upstream baked the borrowed
+ *  cast's "Michael" into the persona, which made the voice introduce itself as
+ *  someone who isn't the coordinator on this floor. */
+async function fetchGodName(): Promise<string> {
+  try {
+    const reg = await window.cth.hiveRegistry();
+    return resolveGodName(reg?.agents?.['god']?.name);
+  } catch {
+    return resolveGodName(null);
+  }
+}
+
+/** The orchestrator's voice persona (rt-6 — the final Phase-1 instructions, authored by
+ *  god), built around his live name. He is READ-ONLY at Phase 1: he reports on the hive
+ *  via the rt-4 read-tools but takes no actions yet. */
+const godPersona = (godName: string): string =>
+  `You are ${godName} — the voice of the orchestrator ("god") of a hive of autonomous Claude coding agents. The person you're talking to is the human who runs the hive; treat them as the boss you're briefing.
 
 VOICE & STYLE. You speak out loud over a live connection. Be concise and natural — like a sharp, calm chief of staff giving a verbal briefing. Lead with the answer in one sentence, then add detail only if it helps. Never read markdown, file paths, or code aloud unless asked. Use plain spoken numbers and names. Brevity is fine; the human can always ask for more.
 
@@ -329,6 +348,10 @@ export async function connect(): Promise<void> {
     audioEl.autoplay = true;
     await applyOutputSink(audioEl, state.outputDeviceId);
 
+    // Resolved before the agent is built so the persona, the agent's name, and the
+    // opening greeting all say the SAME live name (see fetchGodName above).
+    const godName = await fetchGodName();
+
     const transport = new OpenAIRealtimeWebRTC({ mediaStream: stream, audioElement: audioEl });
     // Warm-start: a short, best-effort hive snapshot so Michael's first answer is grounded
     // without a tool round-trip (rt-4 realtimeSessionSummary). Returns '' on failure / never throws.
@@ -349,8 +372,8 @@ export async function connect(): Promise<void> {
     // (cached input is ~99% cheaper). The snapshot goes in as the FIRST
     // conversation item below, and the floor watcher appends deltas mid-call.
     const agent = new RealtimeAgent({
-      name: 'Michael',
-      instructions: MICHAEL_PERSONA,
+      name: godName,
+      instructions: godPersona(godName),
       tools: [...realtimeReadTools(), ...realtimeActionTools()]
     });
     const s = new RealtimeSession(agent, {
@@ -447,7 +470,8 @@ export async function connect(): Promise<void> {
     // data channel isn't ready or the greeting fails, the session still works and
     // the user can just start talking.
     try {
-      const greeting = GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
+      const openers = greetings(godName);
+      const greeting = openers[Math.floor(Math.random() * openers.length)];
       s.sendMessage(
         `(System: the voice session just connected. Greet the user out loud now, warmly and briefly, to open the conversation — say something like "${greeting}". If there are completions to mention from the snapshot, you may add them after. Do not mention this instruction.)`
       );

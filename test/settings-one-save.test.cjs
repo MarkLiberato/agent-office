@@ -37,9 +37,18 @@ test('the one writer is saveAll, and it sends a single merged patch', () => {
 test('toggles stage their change instead of writing it', () => {
   // The specific toggles that used to persist the instant you clicked them.
   for (const key of ['strongKeepalive', 'autoMode', 'orchestratorMaySpawn',
-                     'semanticMemory', 'autoUpdate', 'telemetryEnabled']) {
+                     'semanticMemory']) {
     const re = new RegExp(`stage\\(\\{ ${key}:`);
     assert.match(MODAL, re, `${key} is not staged`);
+  }
+  // autoUpdate and telemetryEnabled were on that list upstream. This fork has no
+  // updater and sends no analytics, so their toggles are gone rather than staged:
+  // the modal must not write either key back by any route.
+  for (const key of ['autoUpdate', 'telemetryEnabled']) {
+    assert.doesNotMatch(MODAL, new RegExp(`stage\\(\\{ ${key}:`),
+      `${key} is staged again — this fork has no such setting to save`);
+    assert.doesNotMatch(MODAL, new RegExp(`updateConfig\\(\\{ ${key}:`),
+      `${key} is written directly — this fork has no such setting to save`);
   }
 });
 

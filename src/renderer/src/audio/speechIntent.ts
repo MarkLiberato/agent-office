@@ -34,6 +34,10 @@ export interface SpokenIntent {
   expiresAt: number;
   /** Stereo position of the speaker, -1..1, from the avatar's screen x. */
   pan: number;
+  /** Stable per-character Kokoro speaking-rate multiplier. */
+  speed: number;
+  /** Stable per-character linear voice trim. */
+  gain: number;
   /** Fired when audio actually STARTS, with the clip length. Captions hang off this. */
   onStart?: (durationMs: number) => void;
   /** Fired when audio ends, is stopped, or the intent is dropped unspoken. */

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useStore, selectedAgent } from '@/store/store';
 import { startMockLoop, stopMockLoop } from '@/store/mockEvents';
 import type { HarnessConfig } from '@/store/config';
+import { officeAudio, DEFAULT_AUDIO_CONFIG } from '@/audio';
 import { DEFAULT_ORG_TRIGGER } from '@shared/triggers';
 import { OfficeFloor } from '@/scene/office/OfficeFloor';
 import { useHive } from '@/hooks/useHive';
@@ -19,7 +20,6 @@ import { HivePicker } from '@/components/HivePicker';
 import { QuitWarningModal, type ClosingTimeState } from '@/components/QuitWarningModal';
 import { CompletionToast } from '@/realtime/CompletionToast';
 import { UpdateToast } from '@/components/UpdateToast';
-import { UpdateBadge } from '@/components/UpdateBadge';
 import { useAppTheme, toggleAppTheme } from '@/design/theme';
 import { SettingsModal, type Section as SettingsSection } from '@/components/SettingsModal';
 import { PixelPanel } from '@/components/PixelPanel';
@@ -31,7 +31,6 @@ import { FullscreenTerminal } from '@/components/FullscreenTerminal';
 import { TaskDetailOverlay } from '@/components/TaskDetailOverlay';
 import { IdePanel } from '@/ide/IdePanel';
 import { useHoldOptionToTalk } from '@/freeflow/holdOption';
-import brandLogo from '@brand/logo.png?url';
 
 // Injected at build time from package.json (see electron.vite.config.ts).
 declare const __APP_VERSION__: string;
@@ -193,6 +192,14 @@ export function App() {
   // about to switch to a different one.
   useHive(hiveOpened ? config : null);
 
+  // Keep the office's sound in step with the saved settings — this is what
+  // applies them at launch; Settings also applies its own edits immediately so
+  // dragging a volume slider is audible while you drag it.
+  useEffect(() => {
+    if (!config) return;
+    officeAudio.applyConfig({ ...DEFAULT_AUDIO_CONFIG, ...(config.audio ?? {}) });
+  }, [config?.audio]);
+
   // Pre-warm a persistent terminal for every live agent so its output is
   // buffered from spawn. Switching agents then re-attaches an already-rendered
   // terminal instantly (with full history) instead of building a blank one.
@@ -295,14 +302,7 @@ export function App() {
           userSelect: 'none'
         }}
       >
-        <img
-          src={brandLogo}
-          alt="Munder Difflin"
-          style={{ height: 20, width: 'auto', display: 'block' }}
-        />
-        {/* v0.3.7: the version is no longer inert text — it doubles as the
-            update control (check / download / restart to update). */}
-        <UpdateBadge />
+        <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 13 }}>OFFICE AGENT</span>
         <span style={{
           fontFamily: 'var(--cth-font-ui)',
           fontSize: 13,

@@ -667,6 +667,10 @@ export class PtyManager {
       }
       const proc = pty.spawn(file, spawnArgs, {
         name: 'xterm-256color',
+        // Use node-pty's bundled ConPTY on Windows. The OS console path can
+        // deadlock synchronously during startup on Windows 11; the bundled
+        // runtime is tested with the native Electron smoke check.
+        ...(process.platform === 'win32' ? { useConptyDll: true } : {}),
         cols: opts.cols ?? 100,
         rows: opts.rows ?? 30,
         cwd: opts.cwd,

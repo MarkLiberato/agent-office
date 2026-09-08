@@ -71,7 +71,7 @@ export interface TerminalEntry {
   automationBlockedAt: number;
   /** True while the user has unsubmitted text in the live TUI prompt. */
   inputDirty: boolean;
-  inputDirtyAt: number; // when the draft was last typed into; drives staleness expiry
+  inputDirtyAt: number; // last keystroke; prevents stale echo from clearing a draft
   automationSettleUntil: number;
   /** Our model of the text on the live prompt line. On the ENTRY, not a closure
    * variable: `inputDirty` is derived from it, so anything that clears the
@@ -437,7 +437,7 @@ const ECHO_GRACE_MS = 1000;
  *  falls back to the keystroke model and keeps it. The asymmetry matters because
  *  the two mistakes do not cost the same — a wrong "empty" hands the prompt to
  *  automation and fuses a message onto what the user is writing, where a wrong
- *  "has text" only parks a queued message until the draft expires. */
+ *  "has text" parks a queued message until clearance is observed. */
 function promptLineHasText(entry: TerminalEntry, now = Date.now()): boolean | null {
   if (!entry.opened || entry.exited) return null;
   // Too soon after the last keystroke for the echo to have landed — the buffer
@@ -456,10 +456,8 @@ function promptLineHasText(entry: TerminalEntry, now = Date.now()): boolean | nu
 
 /** Whether the user has unsubmitted text sitting on this terminal's prompt.
  *  Shares its draft detection with the automation gate, so the "typing" badge
- *  reports the same draft the gate is holding delivery for. It does NOT apply the
- *  staleness expiry the gate does: past STALE_INPUT_MS the gate starts delivering
- *  while this still reports the draft — which is the honest reading, because the
- *  text really is still on the prompt. */
+ *  reports the same draft the gate is holding delivery for. Neither this badge
+ *  nor the delivery gate treats elapsed time as evidence of clearance. */
 export function hasTerminalDraft(ptyId: string | undefined, now = Date.now()): boolean {
   if (!ptyId) return false;
   const entry = pool.get(ptyId);
@@ -536,7 +534,7 @@ export function clearTerminalDraft(ptyId: string): string {
   // close an open picker. Clearing the latch here told automation the prompt was
   // free while a picker still owned it, so the queued message was typed into the
   // picker and acknowledged as delivered — the message was lost and the picker
-  // got garbage. The latch is released by a real Enter/Esc/Ctrl-C, or it expires.
+  // got garbage. The latch is released by a real Enter/Esc/Ctrl-C.
   // Let the TUI repaint the cleared line before automation types into it.
   entry.automationSettleUntil = Date.now() + 300;
   return discarded;

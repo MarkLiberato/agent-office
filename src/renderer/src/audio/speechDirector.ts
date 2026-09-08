@@ -60,6 +60,11 @@ export const DIRECTOR_LIMITS = {
 /** -12 dB as linear gain. Kept here so the director needs no audio import. */
 const OVERLAP_GAIN = Math.pow(10, DIRECTOR_LIMITS.overlapGainDb / 20);
 
+/** How many recent conversations keep their beat counter. At most a couple of
+ *  exchanges are ever live; the rest is slack so a reply queued long after its
+ *  predecessor finished still finds its place in the running order. */
+const CONVERSATION_MEMORY = 512;
+
 interface Active {
   intent: SpokenIntent;
   background: boolean;
@@ -70,6 +75,10 @@ interface Active {
   fadeMs: number;
   settled: Promise<void>;
   settle: () => void;
+  /** Set once finish() has run for this turn. The playback promise chain calls
+   *  finish() from both its resolve and its reject path, so a throwing onEnd
+   *  must not let a second pass re-run the teardown and re-invoke the callback. */
+  finished: boolean;
 }
 
 export class SpeechDirector {
@@ -82,18 +91,26 @@ export class SpeechDirector {
   private floorFreeAt = 0;
   private readonly lastSpokenAt = new Map<string, number>();
   private lastReactionAt = Number.NEGATIVE_INFINITY;
-  /** Next beat index each live conversation is waiting for. An exchange always
+  /** Next beat index each recent conversation is waiting for. An exchange always
    *  starts at beat 0 and advances only as beats finish or are dropped.
    *  "Lowest beat currently pending" is not enough: enqueue() wakes the director
    *  synchronously, so the first beat of a conversation to arrive is trivially
-   *  the lowest pending one and would speak out of order. The entry is removed
-   *  once the exchange drains, so this map only ever holds live conversations. */
+   *  the lowest pending one and would speak out of order.
+   *
+   *  Entries are kept until the conversation is cancelled or ages out of
+   *  CONVERSATION_MEMORY, NOT merely until nothing of it is pending — a beat
+   *  queued asynchronously (a scene that awaits synthesis before replying, or
+   *  simply calls enqueue() seconds later) must still land on the right index
+   *  rather than reopening the exchange at beat 0. Conversation ids are unique
+   *  per exchange, so a retained counter can never be inherited by a new one. */
   private readonly progress = new Map<string, number>();
   private muted = false;
   private disabled = false;
   private timer: unknown = null;
   private ticking = false;
   private dirty = false;
+  private callbackSuppressed = 0;
+  private quiescing = false;
 
   constructor(private readonly sink: SpeechSink, private readonly clock: DirectorClock) {}
 
@@ -105,27 +122,30 @@ export class SpeechDirector {
     return (this.foreground ? 1 : 0) + (this.background ? 1 : 0);
   }
 
-  /** Returns false when the line was refused outright (muted, disabled, bounded). */
+  /** Returns false when the line was refused outright (muted, disabled, bounded).
+   *
+   *  A conversation's beats may be queued all at once, up front, or one at a
+   *  time as each previous beat's onEnd fires — the director remembers where
+   *  each recent exchange is up to (see `progress`), so either style lands the
+   *  beats in order. */
   enqueue(intent: SpokenIntent): boolean {
-    if (this.disabled || this.muted) {
-      intent.onEnd?.();
-      return false;
-    }
+    if (this.disabled || this.muted || this.quiescing || this.callbackSuppressed > 0) return false;
     if (intent.conversationId !== undefined) {
       const held = this.pending.filter((p) => p.conversationId === intent.conversationId).length;
-      if (held >= DIRECTOR_LIMITS.maxPerConversation) {
-        intent.onEnd?.();
-        return false;
-      }
+      if (held >= DIRECTOR_LIMITS.maxPerConversation) return false;
     }
     this.pending.push(intent);
     this.arrival.set(intent.utteranceId, ++this.arrivals);
+    // Bounded by maxPending: drop() -> onEnd -> enqueue() can recurse
+    // synchronously if a callback re-queues, and nothing else stops that loop.
     while (this.pending.length > DIRECTOR_LIMITS.maxPending) {
       // Shed the least important, most recently arrived line — which may well be
       // the one that just arrived. A flood of ambient chatter must never push out
       // a conversation beat that is mid-exchange.
       const ordered = [...this.pending].sort((a, b) => this.compare(a, b));
-      this.drop(ordered[ordered.length - 1]);
+      this.callbackSuppressed++;
+      try { this.drop(ordered[ordered.length - 1]); }
+      finally { this.callbackSuppressed--; }
     }
     this.wake();
     return this.pending.includes(intent) || this.isActive(intent);
@@ -148,11 +168,18 @@ export class SpeechDirector {
 
   /** Silence everything and resolve once the floor is really quiet. */
   async stopAll(fadeMs = 100): Promise<void> {
+    this.quiescing = true;
     this.clearTimer();
-    for (const i of [...this.pending]) this.drop(i);
+    this.callbackSuppressed++;
+    try { for (const i of [...this.pending]) this.drop(i); }
+    finally { this.callbackSuppressed--; }
     const actives = [this.foreground, this.background].filter((a): a is Active => a !== null);
     for (const a of actives) this.stopActive(a, fadeMs);
     await Promise.all(actives.map((a) => a.settled));
+    this.callbackSuppressed++;
+    try { for (const i of [...this.pending]) this.drop(i); }
+    finally { this.callbackSuppressed--; }
+    this.quiescing = false;
   }
 
   /** Muting refuses new lines as well as stopping current ones: a line queued
@@ -172,6 +199,7 @@ export class SpeechDirector {
   // ── scheduling ─────────────────────────────────────────────────────────────
 
   private wake(): void {
+    if (this.quiescing) return;
     if (this.ticking) { this.dirty = true; return; }
     this.ticking = true;
     try {
@@ -231,9 +259,11 @@ export class SpeechDirector {
   // ── selection ──────────────────────────────────────────────────────────────
 
   /** Ordering: priority first, then eligibility, then arrival. Negative when `a`
-   *  should speak before `b`. This cannot be a single number: `eligibleAt` is a
-   *  wall-clock millisecond value, so any weighting that folds it in alongside
-   *  priority swamps the priority term outright. */
+   *  should speak before `b`. Kept as three separate keys rather than packed
+   *  into one weighted number: a packed rank has to reserve a magnitude band
+   *  per key, and silently mis-sorts the moment any key's spread outgrows the
+   *  band reserved for it. Three keys need no such budget, carry no magic
+   *  constants, and read as exactly what they mean. */
   private compare(a: SpokenIntent, b: SpokenIntent): number {
     const byPriority = PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority];
     if (byPriority !== 0) return byPriority;
@@ -268,18 +298,13 @@ export class SpeechDirector {
     if (cid === undefined) return;
     const beat = intent.beatIndex ?? 0;
     if (beat !== this.nextBeat(cid)) return;
+    this.progress.delete(cid);          // re-insert to keep the map recency-ordered
     this.progress.set(cid, beat + 1);
-  }
-
-  /** Forget a conversation once nothing of it is pending or playing. A beat that
-   *  later arrives for a forgotten exchange simply never becomes eligible and
-   *  expires, which is the right outcome for a conversation that is over. */
-  private forgetIfDrained(conversationId: string | undefined): void {
-    if (conversationId === undefined) return;
-    if (this.pending.some((p) => p.conversationId === conversationId)) return;
-    if (this.foreground?.intent.conversationId === conversationId) return;
-    if (this.background?.intent.conversationId === conversationId) return;
-    this.progress.delete(conversationId);
+    while (this.progress.size > CONVERSATION_MEMORY) {
+      const oldest = this.progress.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.progress.delete(oldest);
+    }
   }
 
   private choose(t: number, forOverlap: boolean): SpokenIntent | null {
@@ -317,12 +342,13 @@ export class SpeechDirector {
 
   private start(intent: SpokenIntent, background: boolean): void {
     this.remove(intent);
+    this.arrival.delete(intent.utteranceId);
     const t = this.clock.now();
     let settle!: () => void;
     const settled = new Promise<void>((r) => { settle = r; });
     const active: Active = {
       intent, background, handle: null, endsAt: Number.POSITIVE_INFINITY,
-      cancelled: false, fadeMs: 80, settled, settle
+      cancelled: false, fadeMs: 80, settled, settle, finished: false
     };
     if (background) this.background = active; else this.foreground = active;
 
@@ -330,12 +356,13 @@ export class SpeechDirector {
     if (intent.priority === 'reaction') this.lastReactionAt = t;
 
     void this.sink
-      .play(intent, { gain: background ? OVERLAP_GAIN : 1, pan: intent.pan })
+      .play(intent, { gain: (background ? OVERLAP_GAIN : 1) * intent.gain, pan: intent.pan })
       .then((handle) => {
         active.handle = handle;
         if (active.cancelled) { handle.stop(active.fadeMs); return handle.ended; }
         active.endsAt = this.clock.now() + handle.durationMs;
-        intent.onStart?.(handle.durationMs);
+        try { intent.onStart?.(handle.durationMs); }
+        catch (err) { console.warn('[audio] a speech start callback threw:', err); }
         if (!background) this.prepareAhead();
         this.wake();
         return handle.ended;
@@ -355,6 +382,12 @@ export class SpeechDirector {
   }
 
   private finish(active: Active): void {
+    // The playback promise chain calls finish() from both its resolve and its
+    // reject path (see start()'s .then/.catch tail), so a throw from onEnd
+    // below must not let a second pass re-run the teardown and re-invoke it.
+    if (active.finished) return;
+    active.finished = true;
+
     const wasForeground = !active.background && this.foreground === active;
     if (active.background) {
       if (this.background === active) this.background = null;
@@ -370,10 +403,15 @@ export class SpeechDirector {
     this.advanceConversation(active.intent);
     // onEnd BEFORE the gap is chosen: gapAfter() reads what is pending, so a reply
     // queued right here is what earns the tight reply gap instead of the long one.
-    active.intent.onEnd?.();
+    try {
+      active.intent.onEnd?.();
+    } catch (err) {
+      // A scene callback that throws must not take the floor with it. Without
+      // this the un-park below never runs, floorFreeAt stays at Infinity, and
+      // nothing on this floor ever speaks again.
+      console.warn('[audio] a speech callback threw:', err);
+    }
     if (wasForeground) this.floorFreeAt = this.clock.now() + this.gapAfter(active.intent);
-    // AFTER onEnd, so an exchange that just re-queued itself is not forgotten.
-    this.forgetIfDrained(active.intent.conversationId);
     active.settle();
     this.wake();
   }
@@ -410,8 +448,13 @@ export class SpeechDirector {
     this.remove(intent);
     this.arrival.delete(intent.utteranceId);
     this.advanceConversation(intent);
-    intent.onEnd?.();
-    this.forgetIfDrained(intent.conversationId);
+    try {
+      intent.onEnd?.();
+    } catch (err) {
+      // Same reasoning as finish(): a throwing callback must not stop this
+      // line's bookkeeping from completing.
+      console.warn('[audio] a speech callback threw:', err);
+    }
   }
 
   private dropExpired(t: number): void {
