@@ -120,3 +120,40 @@ test('stopAllSpeech fades every line and resolves once they are silent', async (
   await silence;
   assert.equal(mixer.activeSpeechCount, 0);
 });
+
+test('a failed start does not leak the duck or leave a ghost active line', async () => {
+  const ctx = fakeContext();
+  const mixer = new Mixer(ctx);
+  mixer.setAmbienceVolume(0.6);
+  const amb = mixer.ambienceBus;
+
+  // Start one line to establish the ducked state
+  const firstPlay = await mixer.playSpeech(clip(1));
+  const duckedLevel = amb.gain.value;
+  assert.ok(duckedLevel < 0.6, 'first line ducks the room');
+
+  // Override createBufferSource to make start() throw on the next call
+  const originalCreate = ctx.createBufferSource.bind(ctx);
+  let throwNextStart = false;
+  ctx.createBufferSource = function() {
+    const s = originalCreate();
+    if (throwNextStart) {
+      const originalStart = s.start.bind(s);
+      s.start = () => { throw new Error('simulated start failure'); };
+    }
+    return s;
+  };
+
+  throwNextStart = true;
+  await assert.rejects(mixer.playSpeech(clip(1)), /simulated start failure/);
+
+  // The failed line must not be active (duckDepth unchanged from the first line)
+  assert.equal(mixer.activeSpeechCount, 1, 'failed line is not added to active count');
+  assert.equal(amb.gain.value, duckedLevel, 'duck depth not incremented by failed start');
+
+  // Finish the first line and verify the duck is fully released
+  ctx.sources[0].fireEnded();
+  await firstPlay.ended;
+  assert.equal(amb.gain.value, 0.6, 'duck is released when all real lines finish');
+  assert.equal(mixer.activeSpeechCount, 0, 'no ghost active lines remain');
+});

@@ -164,7 +164,14 @@ export class Mixer {
 
     this.duckAcquire();
     this.active.add(handle);
-    source.start();
+    try {
+      source.start();
+    } catch (err) {
+      // A source that never started will never fire onended, so nothing else
+      // would ever release the duck — the room would stay quiet for good.
+      finish();
+      throw err;
+    }
     return handle;
   }
 
