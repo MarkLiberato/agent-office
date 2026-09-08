@@ -33,3 +33,29 @@ Local data includes configuration, transcripts, and hive files; selected AI prov
 - Runtime verified on Windows 11 on 2026-09-08. The app launches from the bundled Electron runtime, creates its own `Office Agent` application-data folder, opens SQLite (`harness.db`) and paints the animated office. Onboarding was completed end to end against the real wizard: harness home `C:\Obs\Mark`, Claude Code as the coordinator engine on the CLI's own model, auto mode and every background feature left off, telemetry and auto-update written false. The coordinator spawns a live Claude Code terminal in that folder and the hive scaffolding is regenerated under it.
 - One defect was found by that live run and fixed: on Windows every Claude hook died with `call: command not found`. Claude executes hooks through `sh`, so the `call` prefix — a cmd.exe builtin needed only by agy's `hooks.json` and Codex's `config.toml` — was moved to a separate `nodeRunCmdShell()` helper, with a regression test pinning that Claude hook commands never carry it.
 - Still pending: an actual file-producing task run by the coordinator, two-worker isolation and stop controls, relaunch persistence checks, the independent code review, and the Obsidian handoff note.
+- Repository backed up on 2026-09-09. Pushing to the personal `origin2` remote
+  (https://github.com/MarkLiberato/agent-office) failed with
+  `remote: fatal: did not receive expected object cf4996d2…`; the cause was that
+  this clone was shallow — `.git/shallow` was present and `main` resolved to a
+  grafted `3e4f9f6` — so GitHub could not resolve the parent objects and rejected
+  the pack. Nothing was corrupt. `git fetch --unshallow origin` restored the full
+  1,159-commit history, after which `feature/natural-agent-chatter` (`fabbc57`)
+  and `main` (`3e4f9f6`) both pushed cleanly and `git ls-remote origin2` matches
+  the local hashes.
+- Test triage on 2026-09-09: 906 tests, 872 passing, 8 skipped, 26 failing. Every
+  failure is a Windows environment artefact rather than a fork defect, in four
+  classes. Symlink `EPERM` without Developer Mode accounts for all of
+  `test/fs-path-containment.test.cjs` and `test/worktree-deps.test.cjs`. CRLF
+  line endings account for `release-notes.test.cjs` and
+  `telemetry-message-count.test.cjs`: `core.autocrlf` is `true` and the repo
+  carries no `.gitattributes`, so test regexes anchored on `\n` cannot match a
+  `\r\n` file. The `releaseInfo.releaseNotesFile` field those notes are about is
+  in fact present and correct at `electron-builder.yml:25`. POSIX path
+  assumptions account for `agent-token-cap.test.cjs` (expects
+  `/workspace/project`, gets `C:\workspace\project`), `codex-remote.test.cjs`
+  (expects a `unix:///tmp/` socket URL) and `transcript-project-dir.test.cjs`
+  (reads the real `USERPROFILE` instead of the temporary `HOME` the test sets).
+  Environment-dependent install detection accounts for
+  `cli-install-ladder.test.cjs`. The remaining one, `arabic-ui.test.cjs`, passes
+  14 of 14 in isolation and fails only inside the full run, so it is cross-test
+  pollution and not a defect in the Arabic code path.
