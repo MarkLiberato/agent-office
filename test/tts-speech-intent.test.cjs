@@ -39,6 +39,16 @@ test('work data never passes the guard', () => {
   }
 });
 
+test('ordinary English that happens to contain a code keyword is still speakable', () => {
+  // The guard deliberately excludes some code keywords (let, var, return, export, warn)
+  // because they are also common in everyday English. "let me hear it" is the beat
+  // from the banter pool in a later task's "new keyboard day" exchange and must pass.
+  assert.equal(isSpeakable('let me hear it'), true);
+  assert.equal(isSpeakable('return to your desk'), true);
+  assert.equal(isSpeakable('we should warn the team'), true);
+  assert.equal(isSpeakable('export your feelings sometime'), true);
+});
+
 test('conversation beats outrank reactions, which outrank ambient chatter', () => {
   assert.ok(PRIORITY_RANK.conversation < PRIORITY_RANK.reaction);
   assert.ok(PRIORITY_RANK.reaction < PRIORITY_RANK.ambient);

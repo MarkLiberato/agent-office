@@ -47,7 +47,11 @@ export const MAX_SPOKEN_CHARS = 90;
 // Shapes that mean work data reached the synthesizer. This is a backstop for the
 // real rule (speech text comes only from cafeteriaLines.ts and reactionLines.ts),
 // so it is deliberately blunt: banter has no reason to contain a path, a URL, a
-// key, a mail header or a code fragment.
+// key, a mail header or a code fragment. Some code keywords (let, var, return,
+// export, warn) are excluded even though they appear in the patterns, because they
+// are also common in everyday English ("let me hear it", "return to your desk", etc).
+// The guard's failure mode of refusing real banter is worse than passing a fragment
+// that would trip one of the other patterns, so precision beats recall here.
 const FORBIDDEN = [
   /[/\\][\w.-]+[/\\]/,             // a path with at least two separators
   /\.(ts|tsx|js|jsx|json|md|py|rs|go|cjs|mjs|yml|yaml|toml|log|env)\b/i,
@@ -56,11 +60,11 @@ const FORBIDDEN = [
   /~[/\\]/,
   /\bsk-[a-z0-9-]{8,}/i,
   /\b(subject|from|to|cc|bcc)\s*:/i,
-  /\b(error|warn|enoent|eacces|traceback|exception)\b/i,
+  /\b(error|enoent|eacces|traceback|exception)\b/i,
   /\bcommit\s+[0-9a-f]{6,}\b/i,
   /<[@#!][\w-]+>/,                 // Slack mention / channel tokens
   /[<>{}]|=>|\$\{|`/,              // markup, code and template fragments
-  /\b(const|let|var|function|await|async|import|export|return|bash|npm|git|python|pip)\b/i,
+  /\b(const|function|await|async|import|bash|npm|git|python|pip)\b/i,
   /\b[0-9a-f]{12,}\b/i             // hashes and ids
 ];
 
