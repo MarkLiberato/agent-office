@@ -364,6 +364,20 @@ its first newline.
 - **Agent terminals are UTF-8.** They ran with no locale at all.`;
 
 export function initAutoUpdater(getWebContents: () => WebContents | null): void {
+  // This local fork has no release feed. Reject every entry point before native
+  // updater loading, network requests, previews, version stamps, or timers.
+  const localForkUpdatesDisabled = true;
+  if (localForkUpdatesDisabled) {
+    const disabled = (): { ok: false; error: string } => ({
+      ok: false, error: 'Updates are disabled for this local Office Agent build.'
+    });
+    for (const channel of [
+      'update:restartAndInstall', 'update:checkNow', 'update:download',
+      'update:simulate', 'update:openRelease'
+    ]) ipcMain.handle(channel, disabled);
+    ipcMain.handle('update:current', () => ({ state: 'idle' }));
+    return;
+  }
   sendTo = getWebContents;
 
   // IPC surface is registered unconditionally so the renderer can always call it.

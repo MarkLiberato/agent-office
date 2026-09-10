@@ -172,9 +172,32 @@ export interface KnowledgeGraphConfig {
   rootPath?: string;
 }
 
+/** Office floor audio: local agent voices plus the ambient room bed. Mirrors
+ *  the preload and renderer config contracts. */
+export interface AudioSettings {
+  /** Overall output level, 0..1, applied to speech and ambience together. */
+  master: number;
+  /** Whether agents say their thought bubbles out loud. */
+  speech: boolean;
+  speechVolume: number;
+  /** Whether the ambient office sound bed is active. */
+  ambience: boolean;
+  ambienceVolume: number;
+}
+
+const DEFAULT_AUDIO_SETTINGS: AudioSettings = {
+  master: 0.5,
+  speech: true,
+  speechVolume: 1,
+  ambience: true,
+  ambienceVolume: 0.6
+};
+
 export interface HarnessConfig {
   /** Has the user completed the first-run onboarding? */
   onboardingComplete: boolean;
+  /** Floor audio (voices + ambience). Deep-filled on read for older configs. */
+  audio?: AudioSettings;
   /** Self-identified audience picked on the first onboarding screen. Drives the
    *  copy register everywhere onboarding explains itself: 'technical' shows CLI /
    *  flag lingo, 'non-technical' explains each concept in plain language. Unset =
@@ -205,11 +228,11 @@ export interface HarnessConfig {
   /** Default model for newly spawned agents (e.g. 'claude-sonnet-4-6[1m]'); unset = CLI default. */
   defaultModel?: string;
   /** Which provider powers the GOD orchestrator ("Michael"). The persona is
-   *  constant; only its engine is selectable. Default 'claude'. Eligible providers
+   *  constant; only its engine is selectable. Default 'codex'. Eligible providers
    *  are those that can receive inbox (claude/codex/antigravity/qwen). */
   godProvider?: AgentProvider;
   /** The model GOD runs on. Unset falls back to the provider preset's
-   *  `recommendedOrchestratorModel`, then MODEL_GOD. Default 'claude-opus-4-8'. */
+   *  `recommendedOrchestratorModel`, or the installed CLI default for Codex. */
   godModel?: string;
   /** Per-server consent state for the default MCP bundle, keyed by catalog id.
    *  Seeded from MCP_CATALOG (safe-readonly ON, write/secret OFF); the user flips
@@ -287,10 +310,7 @@ export interface HarnessConfig {
    *  AC). Default OFF: the honest default is "survive sleep + catch up once on
    *  resume" (see the powerMonitor 'resume' handler), not "stay awake". */
   strongKeepalive?: boolean;
-  /** Auto-update from GitHub releases (v0.3.4). Default ON. Packaged builds
-   *  check on boot + every ~6h, download in the background, and show a
-   *  "restart to update" toast — installation is always user-initiated. OFF
-   *  disables checking entirely. (Mirrored in preload + renderer config.) */
+  /** Compatibility setting; upstream updates are disabled in this local fork. */
   autoUpdate?: boolean;
   /** Multi-window "floors": expose a New Floor action that opens additional
    *  windows, each an independent office with isolated renderer state (its own
@@ -306,9 +326,8 @@ export interface HarnessConfig {
    *  harness agents only; the user's global Claude theme is never touched. */
   terminalTheme?: 'light' | 'dark';
   /** Anonymous product analytics (PostHog) — the exact events/properties are
-   *  documented in TELEMETRY.md. Default ON (opt-out, like autoUpdate); builds
-   *  without an injected key and environments with DO_NOT_TRACK set never send
-   *  regardless of this flag. (Mirrored in preload + renderer config.) */
+   *  documented in TELEMETRY.md. Default OFF; this local fork always compiles
+   *  without a key, so it cannot send regardless of this flag. */
   telemetryEnabled?: boolean;
   /** Master flag for the TV-show office themes feature (Settings theme picker +
    *  destructive switch flow). Default false = the picker is hidden and the
@@ -403,7 +422,7 @@ export interface HarnessConfig {
   triggersMigratedV1?: boolean;
 
   // ─── Memory reflection (the janitor's condense half) ───────────────────────
-  /** Master toggle for the in-process MemoryReflector. Default on. */
+  /** Master toggle for the in-process MemoryReflector. Opt-in for this local fork. */
   reflectEnabled?: boolean;
   /** How often to scan agent memory.md files for condensing (default 30 min). */
   reflectIntervalMs?: number;
@@ -421,18 +440,17 @@ export interface HarnessConfig {
 
 const DEFAULTS: HarnessConfig = {
   onboardingComplete: false,
+  audio: { ...DEFAULT_AUDIO_SETTINGS },
   harnessHome: null,
   recentHives: [],
   registeredRepos: [],
-  autoMode: true,
+  autoMode: false,
   orchestratorMaySpawn: false,
-  defaultCommand: 'claude',
-  godProvider: 'claude',
-  godModel: 'claude-opus-4-8',
-  // Global default model for every agent that hasn't picked one explicitly — wins
-  // over the role-based tiers (modelForRole) in the spawn handler, so all agents
-  // (incl. god) default to Fable 5. A per-agent model choice still overrides it.
-  defaultModel: 'claude-fable-5',
+  defaultCommand: 'codex',
+  godProvider: 'codex',
+  // Omit model flags unless the user chooses one; use the installed CLI's model.
+  godModel: undefined,
+  defaultModel: undefined,
   // Seeded from the MCP catalog so the consent defaults never drift from it
   // (safe-readonly ON, write/secret OFF).
   mcpDefaults: defaultMcpDefaults(),
@@ -440,13 +458,15 @@ const DEFAULTS: HarnessConfig = {
   workerIdleTimeoutMinutes: 20,
   integrations: [],
   defaultWorkerTokenCap: 0, // 0 = unlimited (human directive: NO per-worker cap)
-  semanticMemory: true,
+  semanticMemory: false,
   embeddingModel: 'minilm',
-  missions: [OPS_STANDUP_MISSION],
+  missions: [],
+  opsStandupSeeded: true,
+  heartbeatSeeded: true,
   notifications: false,
   strongKeepalive: false,
-  autoUpdate: true,
-  telemetryEnabled: true,
+  autoUpdate: false,
+  telemetryEnabled: false,
   multiWindow: true,
   tvShowOffices: false,
   officeTheme: 'office',
@@ -456,7 +476,7 @@ const DEFAULTS: HarnessConfig = {
   slackChannelId: undefined,
   slackPort: undefined,
   slackProactivePosting: false,
-  freeflowEnabled: true,
+  freeflowEnabled: false,
   groqApiKey: undefined,
   freeflowModel: 'whisper-large-v3-turbo',
   realtimeVoiceEnabled: false,
@@ -467,14 +487,17 @@ const DEFAULTS: HarnessConfig = {
   // Triggers. These three are the ONLY object/array defaults that get handed
   // straight back out of `readConfig` for a config that never persisted them, so
   // `withTriggerDefaults` re-copies them on every read — see the note there.
-  contextTrigger: DEFAULT_CONTEXT_TRIGGER,
+  contextTrigger: {
+    compact: { ...DEFAULT_CONTEXT_TRIGGER.compact, enabled: false },
+    clear: { ...DEFAULT_CONTEXT_TRIGGER.clear, enabled: false }
+  },
   webhookTriggers: [],
   orgTrigger: DEFAULT_ORG_TRIGGER,
   triggersMigratedV1: false,
   // Memory reflection — preventive; nobody is over threshold today, so it sits
   // dark until an agent's memory crosses one of these (the verify gate is the
   // safety for the LLM step). Thresholds DECIDED by god 2026-06-06.
-  reflectEnabled: true,
+  reflectEnabled: false,
   reflectIntervalMs: 1_800_000,
   reflectByteTriggerPct: 50,
   reflectSectionTrigger: 50,
@@ -509,9 +532,10 @@ function configPath(): string {
 function withTriggerDefaults(cfg: HarnessConfig): HarnessConfig {
   return {
     ...cfg,
+    audio: { ...DEFAULT_AUDIO_SETTINGS, ...cfg.audio },
     contextTrigger: {
-      compact: { ...DEFAULT_CONTEXT_TRIGGER.compact, ...cfg.contextTrigger?.compact },
-      clear: { ...DEFAULT_CONTEXT_TRIGGER.clear, ...cfg.contextTrigger?.clear }
+      compact: { ...DEFAULT_CONTEXT_TRIGGER.compact, ...DEFAULTS.contextTrigger?.compact, ...cfg.contextTrigger?.compact },
+      clear: { ...DEFAULT_CONTEXT_TRIGGER.clear, ...DEFAULTS.contextTrigger?.clear, ...cfg.contextTrigger?.clear }
     },
     orgTrigger: { ...DEFAULT_ORG_TRIGGER, ...cfg.orgTrigger },
     webhookTriggers: Array.isArray(cfg.webhookTriggers)
@@ -749,14 +773,19 @@ export interface RoleHint {
  *  explicit per-agent model selection always wins. */
 export function modelForRole(
   meta: RoleHint,
-  config?: Pick<HarnessConfig, 'godProvider' | 'godModel'>
+  config?: Pick<HarnessConfig, 'godProvider' | 'godModel' | 'defaultCommand'>,
+  provider?: AgentProvider
 ): string | undefined {
+  const selectedProvider = provider ?? (meta.isGod
+    ? config?.godProvider ?? 'claude'
+    : inferAgentProvider(config?.defaultCommand ?? 'claude'));
   if (meta.isGod) {
-    // GOD engine is selectable: an explicit godModel wins, else the chosen
-    // provider's recommended orchestrator model, else the legacy Opus default.
-    const preset = providerPreset(config?.godProvider ?? 'claude');
-    return config?.godModel ?? preset.recommendedOrchestratorModel ?? MODEL_GOD;
+    const preset = providerPreset(selectedProvider);
+    return config?.godModel ?? preset.recommendedOrchestratorModel
+      ?? (selectedProvider === 'claude' ? MODEL_GOD : undefined);
   }
+  // Claude model tiers are not valid model identifiers for other providers.
+  if (selectedProvider !== 'claude') return undefined;
   const hay = `${meta.role ?? ''} ${(meta.capabilities ?? []).join(' ')}`.toLowerCase();
   if (/\b(triage|rout|verif|lint|format|summar|classif|label)/.test(hay)) return MODEL_HELPER;
   return MODEL_WORKER;

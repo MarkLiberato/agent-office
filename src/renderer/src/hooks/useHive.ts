@@ -11,7 +11,6 @@ import {
 import {
   clearCommandForProvider,
   compactionCommandForProvider,
-  remoteControlCommandForProvider,
   terminalReadyToReceive
 } from '../../../shared/providerAutomation';
 import { DEFAULT_CONTEXT_TRIGGER, type ContextRule } from '../../../shared/triggers';
@@ -31,7 +30,6 @@ const GOD_ID = 'god';
 const SPAWN_ACCENTS = ['coral', 'mint', 'sky', 'lemon', 'lilac', 'peach'] as const;
 const GOD_PTY = `pty-${GOD_ID}`;
 
-const REMOTE_CONTROL_SETTLE_MS = 1500;
 // Provider-agnostic PTY-quiescence idle fallback (#2e). A non-Claude bridge that
 // fires a 'working' event but never its turn-end signal (Stop / session.idle /
 // agent_end) would pin the agent 'working' forever → the idle-only inbox-wake nudge
@@ -69,17 +67,6 @@ function withStandingGoal(agent: Agent, text: string): string {
   if (text.includes('<goal>')) return text;
   return `<goal>\n${goal}\n</goal>\n\n${text}`;
 }
-
-// The first thing Michael (god) is told on a fresh spawn — orient him and put
-// him to work running the floor. Kept terse and action-oriented.
-const INITIAL_GOD_PROMPT = [
-  "You're online as Michael, the orchestrator of the hive. Get oriented, then start running the floor:",
-  '1. Read your memory.md and drain every message in your inbox.',
-  '2. Review board.md + tasks.json and the current roster of agents (active vs archived).',
-  '3. Check fleet health: read fleet.json in the hive root for every agent\'s live tokens, cost, status, breaker level, and inbox backlog (`claude agents` will NOT show your hive\'s agents). Flag anyone stalled, over-budget, or breaker-armed.',
-  '4. Skim COMMANDS.md (hive root) for the Claude Code commands you can use — and run `mempalace wake-up` for a memory digest if the CLI is available.',
-  'Then begin orchestrating: triage requests, delegate work to the team, and keep everyone unblocked. You are fully autonomous — there is no approval queue, so handle tool-permission prompts in this session yourself (the human can approve them remotely from their phone).'
-].join('\n');
 
 // Per-pty submission chain. Every submitToPty for a given pty is appended here so
 // two callers (e.g. the boot sequence's /remote-control and the inbox-wake nudge)
@@ -159,11 +146,15 @@ function submitToPty(
 /** Wrap a user message as an enrich task for the assistant. The assistant's
  *  system prompt has the full instructions; this just frames the one task. */
 function enrichTaskPrompt(text: string): string {
+  // Name the ACTUAL coordinator, read from the live roster. The upstream cast's
+  // "Michael" was hardcoded here, so the prep assistant was told to report to
+  // someone who is not on this floor.
+  const godName = resolveGodName(useStore.getState().agents.find((a) => a.isGod)?.name);
   return [
     `ENRICH TASK: ${text}`,
     '',
     '(Identify the relevant project, cd in, gather READ-ONLY context, then send the improved,',
-    'self-contained prompt to Michael via an outbox message with "to":"god". Do not do the task yourself.)'
+    `self-contained prompt to ${godName} via an outbox message with "to":"god". Do not do the task yourself.)`
   ].join('\n');
 }
 
@@ -396,7 +387,7 @@ export function useHive(config: HarnessConfig | null): void {
       const reg = await window.cth.hiveRegistry().catch(() => null);
       const godName = resolveGodName(reg?.agents?.[GOD_ID]?.name);
 
-      const godProvider = config.godProvider ?? 'claude';
+      const godProvider = config.godProvider ?? 'codex';
       const godModel = config.godModel;
       const command = buildSpawnCommand(config, godModel, godProvider);
       const [exe, ...args] = tokenizeCommand(command.trim());
@@ -435,41 +426,15 @@ export function useHive(config: HarnessConfig | null): void {
         command: command.trim(),
         provider: godProvider,
         model: godModel,
+        seedPrompt: res.resumed ? undefined : res.seedPrompt,
         isGod: true,
         recentTextTs: Date.now()
       };
       useStore.getState().addAgent(god);
       useStore.getState().setGodStatus('ready');
 
-      // Kick Michael off once his TUI is up. Always re-enable remote control so
-      // the human can approve permission prompts from their phone (best-effort — a
-      // failed/unknown slash command just prints to his terminal and is harmless).
-      // Then, ONLY on a genuinely fresh spawn, hand him the orientation prompt —
-      // a RESUMED Michael already has his full context and must not be re-oriented
-      // mid-thread (that would reset the floor's situational awareness). Both go
-      // through the per-pty submit chain, so they're strictly sequential and can't
-      // jam together; the boot-grace window keeps the inbox-wake/drain loops off
-      // Michael until he's settled. The live-PTY branch above skips this entirely.
-      const resumedGod = res.resumed === true;
-      bootGraceUntil.current[GOD_ID] = Date.now() + BOOT_GRACE_MS;
-      void (async () => {
-        try {
-          const remoteCommand = remoteControlCommandForProvider(godProvider, godName);
-          if (remoteCommand) {
-            // settleMs pauses the chain ~1.5s after /remote-control before the
-            // orientation prompt (fresh spawns only) is submitted next.
-            await submitToPty(GOD_PTY, remoteCommand, godProvider, REMOTE_CONTROL_SETTLE_MS);
-          }
-          if (!cancelled && !resumedGod) {
-            // A type-into-tui god (Crush) can't ride its hive protocol on argv, so the
-            // main process hands it back as seedPrompt — type it FIRST (identity), then
-            // the orientation kick. Serialized via writeChains so they can't jam. (ondev-b)
-            if (res.seedPrompt) await submitToPty(GOD_PTY, res.seedPrompt, godProvider);
-            await submitToPty(GOD_PTY, INITIAL_GOD_PROMPT, godProvider);
-          }
-        } catch { /* PTY may have died during startup */ }
-        finally { bootGraceUntil.current[GOD_ID] = 0; }
-      })();
+      // Opening the office prepares a terminal; only user requests start AI work.
+      bootGraceUntil.current[GOD_ID] = 0;
     }, 1200);
     return () => { cancelled = true; clearTimeout(t); };
   }, [config?.onboardingComplete, config?.harnessHome]);
@@ -846,12 +811,16 @@ export function useHive(config: HarnessConfig | null): void {
             target.ptyId!,
             withStandingGoal(
               target,
-              wrap ? wrap(next) : (next.instruction ?? next.text)
+              (target.isGod && target.seedPrompt ? `${target.seedPrompt}\n\n` : '') +
+                (wrap ? wrap(next) : (next.instruction ?? next.text))
             ),
             inferAgentProvider(target.command, target.provider)
           ),
           () => {
             removeQueuedMessage(srcId, next.id);
+            if (target.isGod && target.seedPrompt) {
+              useStore.getState().updateAgent(target.id, { seedPrompt: undefined });
+            }
             // Zero the gauge on a DELIVERED /clear — the new session's context
             // isn't known until statusLine fires after the first post-clear
             // response, so leaving it at the old value shows a stale-full bar.
@@ -1202,11 +1171,12 @@ export function useHive(config: HarnessConfig | null): void {
         // a rebuilt one only if it predates the persisted `command` field.
         const command = (a.command ?? '').trim() || buildSpawnCommand(cfg, a.model, provider);
         const [exe, ...args] = tokenizeCommand(command);
+        const godNameForRole = useStore.getState().agents.find((x) => x.isGod)?.name;
         const hive = a.isGod
-          ? { id: a.id, name: a.name, cwd, provider, isGod: true, role: roleForHiveSpawn(a) }
+          ? { id: a.id, name: a.name, cwd, provider, isGod: true, role: roleForHiveSpawn(a, godNameForRole) }
           : a.isAssistant
-          ? { id: a.id, name: a.name, cwd, provider, isAssistant: true, role: roleForHiveSpawn(a) }
-          : { id: a.id, name: a.name, cwd, provider, role: roleForHiveSpawn(a) };
+          ? { id: a.id, name: a.name, cwd, provider, isAssistant: true, role: roleForHiveSpawn(a, godNameForRole) }
+          : { id: a.id, name: a.name, cwd, provider, role: roleForHiveSpawn(a, godNameForRole) };
         // Spawn at the terminal's real grid so the TUI's absolute cursor moves land
         // in the right cells (a size mismatch scatters the redraw).
         const entry = acquireTerminal(deadId);

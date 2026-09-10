@@ -99,14 +99,10 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
 
   const [home, setHome] = useState<string>('');
   const [repos, setRepos] = useState<string[]>([]);
-  const [autoMode, setAutoMode] = useState<boolean>(true);
-  // Anonymous usage stats (TELEMETRY.md). Default ON (opt-out); persisted by
-  // finish() so unchecking before finishing means nothing is ever sent.
-  const [shareStats, setShareStats] = useState<boolean>(true);
-  const [godProvider, setGodProvider] = useState<AgentProvider>('claude');
-  const [godModel, setGodModel] = useState<string | undefined>(
-    providerPreset('claude').recommendedOrchestratorModel
-  );
+  const [autoMode, setAutoMode] = useState<boolean>(false);
+  const [godProvider, setGodProvider] = useState<AgentProvider>('codex');
+  // Let the installed CLI resolve its configured model unless explicitly chosen.
+  const [godModel, setGodModel] = useState<string | undefined>();
   const [error, setError] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
 
@@ -178,7 +174,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   // at the config-write boundary AND at ensureHarnessHome's mkdir, so every
   // downstream reader still sees one absolute path. No new IPC surface.
   useEffect(() => {
-    if (!home) setHome('~/HarnessAgents');
+    if (!home) setHome('~/OfficeAgent');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -224,7 +220,10 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
       autoMode,
       godProvider,
       godModel,
-      telemetryEnabled: shareStats
+      defaultCommand: providerPreset(godProvider).defaultCommand,
+      defaultModel: undefined,
+      telemetryEnabled: false,
+      autoUpdate: false
     });
     setBusy(false);
     onComplete(next);
@@ -403,23 +402,9 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                   <span style={{ flexShrink: 0, marginTop: 1 }}><Icon name="sparkle" /></span>
                   <span>
                     {plain ? (
-                      <Trans i18nKey="onboarding.orchestrator.cliAgentPlain" components={{ strong: <strong /> }}>
-                        A <strong>CLI agent</strong> is an AI coding assistant that runs on your
-                        computer — popular ones are Claude Code (Anthropic), Codex (OpenAI) and
-                        Antigravity (Google Gemini). <strong>Your clone</strong> is the always-on
-                        one that runs your whole office. We recommend Claude Code on Opus 4.8 (1M).
-                        You can add or switch the others later.
-                      </Trans>
+                      <Trans i18nKey="onboarding.orchestrator.cliAgentPlain" components={{ strong: <strong /> }} />
                     ) : (
-                      <Trans i18nKey="onboarding.orchestrator.cliAgent" components={{ strong: <strong /> }}>
-                        Each option is a <strong>CLI engine</strong> (Claude Code, Codex,
-                        Antigravity/Gemini, or a local proxy like Qwen). Engines marked
-                        INSTALLED are already on this machine; INSTALLS ON FIRST RUN means the app
-                        sets it up when Michael first starts.
-                        <strong> Your clone</strong> (Michael) is the engine that orchestrates the whole
-                        hive. Recommended: Claude Code · Opus 4.8 · 1M. Other providers can be wired
-                        per agent later.
-                      </Trans>
+                      <Trans i18nKey="onboarding.orchestrator.cliAgent" components={{ strong: <strong /> }} />
                     )}
                   </span>
                 </div>
@@ -442,9 +427,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                           checked={sel}
                           onChange={() => {
                             setGodProvider(p.id);
-                            // Reset the model to the new provider's recommended pick so the
-                            // dropdown below always shows a valid model for the chosen engine.
-                            setGodModel(p.recommendedOrchestratorModel);
+                            setGodModel(undefined);
                           }}
                           style={{ width: 16, height: 16, flexShrink: 0 }}
                         />
@@ -479,7 +462,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                             }}>{badge}</span>
                           );
                         })()}
-                        {p.id === 'claude' && (
+                        {p.id === 'codex' && (
                           <span style={{
                             fontSize: 10, padding: '1px 5px', lineHeight: '16px',
                             background: 'var(--cth-lemon)',
@@ -532,7 +515,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                     background: 'var(--cth-paper-100)', boxShadow: 'inset 0 0 0 2px var(--cth-ink-900)',
                     fontSize: 12, lineHeight: '17px', color: 'var(--cth-ink-900)'
                   }}>
-                    <span>{engineAvailabilityMessage(selectedEngine, providerPreset(godProvider).label)}</span>
+                    <span>{engineAvailabilityMessage(selectedEngine, providerPreset(godProvider).label, godName)}</span>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                       <PixelButton variant="secondary" size="sm" onClick={() => { void probeEngines(); }} disabled={probing}>
                         {probing ? 'checking...' : 'check again'}
@@ -552,7 +535,8 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                     onChange={(e) => setGodModel(e.target.value || undefined)}
                     style={inputStyle}
                   >
-                    {modelsForProvider(godProvider).map((m) => (
+                    <option value="">CLI default (from your installed provider)</option>
+                    {modelsForProvider(godProvider).filter((m) => m.id).map((m) => (
                       <option key={m.label} value={m.id ?? ''}>{m.label}</option>
                     ))}
                   </select>
@@ -687,15 +671,11 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                   onChange={toggleOpenAtLogin}
                 />
 
-                <ToggleRow
-                  icon="info"
-                  label={t('onboarding.permissions.shareStats')}
-                  desc={t('onboarding.permissions.shareStatsDesc')}
-                  on={shareStats}
-                  tint="var(--cth-lemon-light)"
-                  edge="var(--cth-lemon)"
-                  onChange={() => setShareStats(!shareStats)}
-                />
+                <p style={{ margin: 0, fontSize: 12, lineHeight: '18px' }}>
+                  Office Agent usage analytics and upstream auto-updates are disabled.
+                  Tasks and relevant project context are sent to your selected AI provider.
+                  Sign in using that provider's terminal when prompted.
+                </p>
 
                 {/* LEVER 4 "— instruction-only: the OS won't let the app flip its sleep setting itself, so we deep-link the pane where one exists (macOS/Windows) and fall back to text-only guidance on Linux. */}
                 <div style={{

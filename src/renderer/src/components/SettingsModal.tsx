@@ -1,6 +1,7 @@
 import { useState, useEffect, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
-import { agentModels, type HarnessConfig } from '@/store/config';
+import { agentModels, type HarnessConfig, type AudioSettings } from '@/store/config';
+import { officeAudio, DEFAULT_AUDIO_CONFIG } from '@/audio';
 import { useStore } from '@/store/store';
 import {
   CLONE_NODE_BLURB,
@@ -220,6 +221,23 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
     catch { setNotifications(!next); /* revert on failure */ }
   };
 
+  // Office sound. The mixer is updated on every change so a volume slider is
+  // audible WHILE you drag it, but the value is staged like every other setting
+  // and written by the footer Save — a live preview, not a second config writer.
+  // Closing without saving therefore leaves the mixer previewing until the next
+  // launch, which is the same bargain the other staged toggles make.
+  const [audio, setAudio] = useState<AudioSettings>({
+    ...DEFAULT_AUDIO_CONFIG,
+    ...(config.audio ?? {})
+  });
+
+  const patchAudio = (patch: Partial<AudioSettings>) => {
+    const next = { ...audio, ...patch };
+    setAudio(next);
+    officeAudio.applyConfig(next);   // preview only — no disk write here
+    stage({ audio: next });
+  };
+
   // ─── v0.3.4 redesign: settings that were onboarding-trapped or UI-less ────
   const cfgX = config as HarnessConfig & {
     strongKeepalive?: boolean; audience?: string; autoMode?: boolean;
@@ -280,32 +298,30 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
     setSimpleMode(next);
     stage({ audience: next ? 'non-technical' : 'technical' } as Partial<HarnessConfig>);
   };
-  const [autoModeOn, setAutoModeOn] = useState<boolean>(cfgX.autoMode !== false);
+  const [autoModeOn, setAutoModeOn] = useState<boolean>(cfgX.autoMode === true);
   const toggleAutoMode = async () => {
     const next = !autoModeOn;
     setAutoModeOn(next);
     stage({ autoMode: next } as Partial<HarnessConfig>);
   };
-  // Default OFF, so an absent value must read as off. Note this is `=== true`,
-  // the mirror image of autoMode's `!== false` above, because the two defaults
-  // are opposite.
+  // Default OFF, so an absent value must read as off.
   const [orchSpawnOn, setOrchSpawnOn] = useState<boolean>(cfgX.orchestratorMaySpawn === true);
   const toggleOrchSpawn = async () => {
     const next = !orchSpawnOn;
     setOrchSpawnOn(next);
     stage({ orchestratorMaySpawn: next } as Partial<HarnessConfig>);
   };
-  const [defaultModelSel, setDefaultModelSel] = useState<string>(cfgX.defaultModel ?? 'claude-fable-5');
+  const [defaultModelSel, setDefaultModelSel] = useState<string>(cfgX.defaultModel ?? '');
   const saveDefaultModel = (id: string): void => {
     setDefaultModelSel(id);
-    stage({ defaultModel: id } as Partial<HarnessConfig>);
+    stage({ defaultModel: id || undefined } as Partial<HarnessConfig>);
   };
   const [maxTurnsVal, setMaxTurnsVal] = useState<string>(cfgX.maxTurns != null ? String(cfgX.maxTurns) : '');
   const maxTurnsPatch = (): Partial<HarnessConfig> => {
     const n = maxTurnsVal.trim() === '' ? undefined : Number(maxTurnsVal);
     return { maxTurns: Number.isFinite(n as number) && (n as number) > 0 ? Math.round(n as number) : undefined } as Partial<HarnessConfig>;
   };
-  const [semMemOn, setSemMemOn] = useState<boolean>(cfgX.semanticMemory !== false);
+  const [semMemOn, setSemMemOn] = useState<boolean>(cfgX.semanticMemory === true);
   const toggleSemMem = async () => {
     const next = !semMemOn;
     setSemMemOn(next);
@@ -478,23 +494,10 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
     setAutoCompactPending(next);
   };
 
-  // ─── Auto-update (default ON; gates main's updater checks entirely) ────────
-  const [autoUpdateOn, setAutoUpdateOn] = useState<boolean>(config.autoUpdate !== false);
-  const toggleAutoUpdate = async () => {
-    const next = !autoUpdateOn;
-    setAutoUpdateOn(next);
-    try { stage({ autoUpdate: next }); }
-    catch { setAutoUpdateOn(!next); }
-  };
+  // Upstream updates and product analytics are unavailable in this local fork.
+  const autoUpdateOn = false;
 
-  // ─── Anonymous usage stats (default ON = opt-out; contract in TELEMETRY.md) ─
-  const [telemetryOn, setTelemetryOn] = useState<boolean>(config.telemetryEnabled !== false);
-  const toggleTelemetry = async () => {
-    const next = !telemetryOn;
-    setTelemetryOn(next);
-    try { stage({ telemetryEnabled: next }); }
-    catch { setTelemetryOn(!next); }
-  };
+  const telemetryOn = false;
 
   // --- Free Flow (voice dictation → message queue) ---
   const setFreeflowEnabledStore = useStore((s) => s.setFreeflowEnabled);
@@ -524,7 +527,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
   };
   // v0.3.4 fix: the config default is ON ('now on by default', 0.2.7) — seeding
   // with `?? false` displayed OFF while the feature was actually running.
-  const [freeflowEnabled, setFreeflowEnabled] = useState(config.freeflowEnabled !== false);
+  const [freeflowEnabled, setFreeflowEnabled] = useState(config.freeflowEnabled === true);
   const [groqKey, setGroqKey] = useState(config.groqApiKey ?? '');
   const [freeflowModel, setFreeflowModel] = useState(config.freeflowModel ?? 'whisper-large-v3-turbo');
   const [showGroqKey, setShowGroqKey] = useState(false);
@@ -1122,6 +1125,100 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
 
                       <div style={{ height: 1, background: 'var(--cth-ink-300)' }} />
 
+                      {/* Office sound — agent voices + room ambience */}
+                      <div>
+                        <div style={sectionHead}>
+                          {t('settings.audio.title')}
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                          <span style={{ fontSize: 13, lineHeight: '20px', color: 'var(--cth-ink-900)' }}>
+                            {t('settings.audio.master')}
+                          </span>
+                          <input
+                            type="range"
+                            min={0}
+                            max={100}
+                            value={Math.round(audio.master * 100)}
+                            aria-label={t('settings.audio.master')}
+                            onChange={(e) => patchAudio({ master: Number(e.target.value) / 100 })}
+                            style={{ width: 160 }}
+                          />
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: 12 }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                            <span style={{ fontSize: 13, lineHeight: '20px', color: 'var(--cth-ink-900)' }}>
+                              {t('settings.audio.speech')}
+                            </span>
+                            <span style={{ fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-500)' }}>
+                              {t('settings.audio.speechHint')}
+                            </span>
+                          </div>
+                          <PixelButton
+                            variant={audio.speech ? 'primary' : 'secondary'}
+                            size="sm"
+                            onClick={() => patchAudio({ speech: !audio.speech })}
+                          >
+                            {audio.speech ? t('common.on') : t('common.off')}
+                          </PixelButton>
+                        </div>
+
+                        {audio.speech && (
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: 8 }}>
+                            <span style={{ fontSize: 13, lineHeight: '20px', color: 'var(--cth-ink-900)' }}>
+                              {t('settings.audio.speechVolume')}
+                            </span>
+                            <input
+                              type="range"
+                              min={0}
+                              max={100}
+                              value={Math.round(audio.speechVolume * 100)}
+                              aria-label={t('settings.audio.speechVolume')}
+                              onChange={(e) => patchAudio({ speechVolume: Number(e.target.value) / 100 })}
+                              style={{ width: 160 }}
+                            />
+                          </div>
+                        )}
+
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: 12 }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                            <span style={{ fontSize: 13, lineHeight: '20px', color: 'var(--cth-ink-900)' }}>
+                              {t('settings.audio.ambience')}
+                            </span>
+                            <span style={{ fontSize: 12, lineHeight: '16px', color: 'var(--cth-ink-500)' }}>
+                              {t('settings.audio.ambienceHint')}
+                            </span>
+                          </div>
+                          <PixelButton
+                            variant={audio.ambience ? 'primary' : 'secondary'}
+                            size="sm"
+                            onClick={() => patchAudio({ ambience: !audio.ambience })}
+                          >
+                            {audio.ambience ? t('common.on') : t('common.off')}
+                          </PixelButton>
+                        </div>
+
+                        {audio.ambience && (
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: 8 }}>
+                            <span style={{ fontSize: 13, lineHeight: '20px', color: 'var(--cth-ink-900)' }}>
+                              {t('settings.audio.ambienceVolume')}
+                            </span>
+                            <input
+                              type="range"
+                              min={0}
+                              max={100}
+                              value={Math.round(audio.ambienceVolume * 100)}
+                              aria-label={t('settings.audio.ambienceVolume')}
+                              onChange={(e) => patchAudio({ ambienceVolume: Number(e.target.value) / 100 })}
+                              style={{ width: 160 }}
+                            />
+                          </div>
+                        )}
+                      </div>
+
+                      <div style={{ height: 1, background: 'var(--cth-ink-300)' }} />
+
                       {/* Scheduled auto-compact (compact-maintenance mission) */}
                       <div>
                         <div style={sectionHead}>
@@ -1157,7 +1254,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                           <PixelButton
                             variant={autoUpdateOn ? 'primary' : 'secondary'}
                             size="sm"
-                            onClick={toggleAutoUpdate}
+                            disabled
                           >
                             {autoUpdateOn ? t('common.on') : t('common.off')}
                           </PixelButton>
@@ -1175,7 +1272,7 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                           <PixelButton
                             variant={telemetryOn ? 'primary' : 'secondary'}
                             size="sm"
-                            onClick={toggleTelemetry}
+                            disabled
                           >
                             {telemetryOn ? t('common.on') : t('common.off')}
                           </PixelButton>
@@ -1205,10 +1302,10 @@ export function SettingsModal({ config, onClose, initialSection }: SettingsModal
                             {t('settings.agentsModels.defaultModelDesc', { godName })}
                           </span>
                           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                            {agentModels().map((m) => (
+                            {[{ label: 'CLI default', id: '' }, ...agentModels().filter((m) => m.id)].map((m) => (
                               <button
                                 key={m.label}
-                                onClick={() => { if (m.id) void saveDefaultModel(m.id); }}
+                                onClick={() => { void saveDefaultModel(m.id ?? ''); }}
                                 style={{
                                   padding: '3px 8px 1px', border: 'none', cursor: 'pointer',
                                   fontFamily: 'var(--cth-font-ui)', fontSize: 12, color: 'var(--cth-ink-900)',

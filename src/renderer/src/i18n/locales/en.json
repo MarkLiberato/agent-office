@@ -237,9 +237,9 @@
       "autoCompact": "Scheduled auto-compact",
       "autoCompactDesc": "Queue /compact for every agent on a schedule (hourly by default; interval in the Triggers tab). Off by default — long-running agents may overflow their context without it.",
       "autoUpdate": "Auto-update",
-      "autoUpdateDesc": "Check GitHub releases and download updates in the background; you choose when to restart. Never restarts on its own.",
+      "autoUpdateDesc": "Disabled in this local fork. Upstream releases cannot replace Office Agent.",
       "telemetry": "Anonymous usage stats",
-      "telemetryDesc": "A handful of anonymous events (app opened, agent spawned, feature used) — never prompts, code, paths, or agent output. Full list in TELEMETRY.md.",
+      "telemetryDesc": "Disabled in this local fork. Office Agent does not send product usage analytics.",
       "language": "Language",
       "languageDesc": "Choose the language for the app interface. English is the default.",
       "dangerZone": "DANGER ZONE",
@@ -375,7 +375,17 @@
     "saved": "Saved",
     "saving": "Saving…",
     "unsavedChanges": "unsaved changes",
-    "unsavedWarning": "You have unsaved settings. Close anyway and lose them?"
+    "unsavedWarning": "You have unsaved settings. Close anyway and lose them?",
+    "audio": {
+      "title": "Office sound",
+      "master": "Master volume",
+      "speech": "Agents speak their thoughts",
+      "speechVolume": "Voice volume",
+      "ambience": "Office ambience",
+      "ambienceVolume": "Ambience volume",
+      "speechHint": "Agents say their thought bubbles out loud, each in its own voice. Runs offline on your machine.",
+      "ambienceHint": "Room tone plus the occasional keyboard, phone, coffee machine or vending thunk."
+    }
   },
   "commandCenter": {
     "title": "COMMAND CENTER",
@@ -578,7 +588,7 @@
   },
   "onboarding": {
     "titles": {
-      "persona": "WELCOME TO MUNDER DIFFLIN",
+      "persona": "WELCOME TO OFFICE AGENT",
       "welcome": "MEET YOUR OFFICE",
       "home": "STEP 1 OF 4 · HARNESS HOME",
       "homePlain": "STEP 1 OF 4 · A HOME FOR THE APP",
@@ -590,9 +600,9 @@
       "done": "ALL SET"
     },
     "persona": {
-      "headline": "A CLONE OF YOU, WORKING 24/7",
-      "body": "Munder Difflin turns the CLI agent you already use into a clone of you — one that runs an office of long-running agents and keeps working while you're away. It manages everything around them: context, memory, tasks, triggers, environment, files, and integrations.",
-      "bodyLocal": " Everything runs on this machine.",
+      "headline": "YOUR LOCAL OFFICE FOR AI WORK",
+      "body": "Office Agent brings real AI terminals into an animated office. Choose a project, give your workers tasks, and watch their output. Built from the open-source Munder Difflin project; this is an independent local fork.",
+      "bodyLocal": " The app and its records live on this computer. Your selected AI provider receives prompts and relevant task context.",
       "ask": "FIRST — WHO ARE YOU? (we'll tailor the setup)",
       "technicalTitle": "I'M TECHNICAL",
       "technicalDesc": "I write code or work in a terminal. Show me CLI commands, flags, and model ids.",
@@ -602,7 +612,7 @@
     "welcome": {
       "headline": "YOUR CLONE AND THE FLOOR IT RUNS",
       "descPlain": "Your clone runs a small office of AI workers, and you watch it all from one screen. Here's what's inside:",
-      "desc": "Your clone coordinates a hive of AI coding agents — persistent, watchable, all local. Here's what's inside:",
+      "desc": "Coordinate real AI terminals from an animated local office. Tasks run through your selected provider. Here's what's inside:",
       "features": {
         "engines": {
           "label": "ELEVEN ENGINES, ONE OFFICE",
@@ -645,9 +655,9 @@
       "cursor": "Cursor Agent CLI — uses your Cursor credits (Luna, Composer, …)"
     },
     "home": {
-      "descPlain": "Create a new, empty folder for the app to call home. Everything the app remembers — its own settings and your agents' memory — is stored here. Something like ~/HarnessAgents works well. We'll create it for you if it doesn't exist.",
-      "desc": "Pick a folder where the harness will keep its own files — agent metadata, logs, and any new repos you create from here. Something like ~/HarnessAgents is a fine default. We'll create it if it doesn't exist.",
-      "placeholder": "/path/to/HarnessAgents",
+      "descPlain": "Choose a folder for your agents' memory and project records. App settings are stored separately in your local app data. Something like ~/OfficeAgent works well. We'll create it for you if it doesn't exist.",
+      "desc": "Pick a folder where the harness will keep its own files — agent metadata, logs, and any new repos you create from here. Something like ~/OfficeAgent is a fine default. We'll create it if it doesn't exist.",
+      "placeholder": "~/OfficeAgent",
       "createPick": "create / pick",
       "pick": "pick",
       "notePlain": "You won't need to open this folder day-to-day — it's just where the app keeps its notes so nothing is lost when you restart.",
@@ -656,8 +666,8 @@
     "orchestrator": {
       "descPlain": "{{godName}} is your clone — he reads your requests, breaks them into tasks, and hands them to the right agent. He's the boss of the floor; you're still the boss of him. Choose which AI engine powers him.",
       "desc": "{{godName}} is your clone — the boss of the floor you just met. He triages your requests, assigns tasks, and manages the team, while escalating anything that genuinely needs you. Pick the engine and model that power him; give him a longer-context, higher-capability model.",
-      "cliAgentPlain": "A <strong>CLI agent</strong> is an AI coding assistant that runs on your computer — popular ones are Claude Code (Anthropic), Codex (OpenAI) and Antigravity (Google Gemini). <strong>Your clone</strong> is the always-on one that runs your whole office. We recommend Claude Code on Opus 4.8 (1M). You can add or switch the others later.",
-      "cliAgent": "Each option is a <strong>CLI engine</strong> (Claude Code, Codex, Antigravity/Gemini, or a local proxy like Qwen). Engines marked INSTALLED are already on this machine; INSTALLS ON FIRST RUN means the app sets it up when {{godName}} first starts. <strong>Your clone</strong> ({{godName}}) is the engine that orchestrates the whole hive. Recommended: Claude Code · Opus 4.8 · 1M. Other providers can be wired per agent later.",
+      "cliAgentPlain": "A <strong>CLI agent</strong> is an AI assistant with a terminal on your computer. <strong>Your coordinator</strong> uses the provider you choose here. Codex is selected to start; use its configured model or choose one below. Sign in with your provider when its terminal asks.",
+      "cliAgent": "Each option is a <strong>CLI engine</strong>. INSTALLED means the command was found on this machine, not that authentication is verified. <strong>Your coordinator</strong> uses this provider and its CLI default model unless you select an override. Provider sign-in happens in the terminal.",
       "recommended": "RECOMMENDED",
       "workersOnly": "WORKERS ONLY",
       "workersOnlyHint": "Can't drain hive mail yet, so it can't run your clone — still available when hiring workers.",
@@ -677,14 +687,14 @@
       "autoLabelPlain": "LET AGENTS WORK ON THEIR OWN",
       "autoLabel": "WORK AUTONOMOUSLY (AUTO MODE)",
       "autoOnPlain": "On. Agents carry out tasks without stopping to ask — the smoothest experience.",
-      "autoOffPlain": "Off. Agents pause and ask you before changing files or running commands.",
-      "autoOn": "On. Agents never pause — Claude runs bypassPermissions, Codex bypasses approvals + sandbox, etc.",
-      "autoOff": "Off. Each agent asks before edits / shell commands (Claude default, codex -a untrusted, …).",
+      "autoOffPlain": "Off by default. Each provider uses its normal permission checks; review requests in the terminal. Protection varies by provider.",
+      "autoOn": "On. Uses the selected engine's automation flags. Some providers bypass permission checks or sandboxing; inspect the command before starting.",
+      "autoOff": "Off by default. Each engine keeps its own permission model — Claude Code asks before edits and shell commands; Codex runs with workspace-write access and on-request approvals. There is no universal sandbox across providers.",
       "autoNotePlain": "Best when agents work in their own projects. You can change this later, including for individual agents.",
-      "autoNote": "The right default for the \"control room\" experience; a foot-gun on production repos. Override per agent in the Add Agent dialog.",
+      "autoNote": "Keep this off for interactive permission review. You can inspect each worker's command in the Add Agent dialog.",
       "reliabilityHead": "KEEP THINGS RUNNING WHILE YOU'RE AWAY",
-      "reliabilityDescPlain": "Your agents keep working on a schedule and in live terminals, even when you step away. These settings keep you in the loop and keep things running.",
-      "reliabilityDesc": "Your agents keep working on a schedule and in live terminals. If your computer fully sleeps those timers pause and catch up the moment you're back — nothing is lost, it may just run late.",
+      "reliabilityDescPlain": "Scheduled and background AI work are off by default. Tasks you start can keep running while the app is open. These optional settings control notifications and sleep.",
+      "reliabilityDesc": "Scheduled and background AI work are off by default. Active terminals may continue while the app is open. Sleep can pause processes; inspect task status after resuming.",
       "keepAwake": "KEEP WORKING WHILE AWAY",
       "keepAwakeDesc": "Strong keep-alive: stops your computer from sleeping while an agent is live, so schedules and terminals fire on time even when you step away. Uses more battery — best on power. Off by default.",
       "notifications": "DESKTOP NOTIFICATIONS",

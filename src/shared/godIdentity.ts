@@ -1,6 +1,11 @@
 /** God's identity before anyone has customized it — the app's own default,
- *  not a magic string sprinkled at every spawn call site. */
-export const DEFAULT_GOD_NAME = 'Michael';
+ *  not a magic string sprinkled at every spawn call site.
+ *
+ *  Upstream shipped "Michael" from its borrowed office cast. This is a personal
+ *  build with one user, so the coordinator carries that user's own name and the
+ *  fictional persona is not the starting point. A rename in the UI still wins
+ *  over this, via resolveGodName() below. */
+export const DEFAULT_GOD_NAME = 'Mark';
 
 /**
  * Resolve god's display name for a (re)spawn.

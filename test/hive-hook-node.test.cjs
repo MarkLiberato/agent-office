@@ -81,7 +81,7 @@ function hookCommandsUnder(home) {
   return found.filter((c) => shim.test(c));
 }
 
-const usesLauncher = (cmd, launcher) => cmd.startsWith(launcher) || cmd.startsWith(`"${launcher}"`);
+const usesLauncher = (cmd, launcher) => cmd.startsWith(launcher) || cmd.startsWith(`"${launcher}"`) || cmd.startsWith(`call "${launcher}"`);
 
 async function run(cmd, env) {
   return new Promise((resolve) => {
@@ -134,6 +134,32 @@ test('the claude hook + statusLine commands run through the launcher', async (t)
 
   assert.ok(commands.length > 0);
   for (const cmd of commands) assert.equal(usesLauncher(cmd, launcher), true, cmd);
+});
+
+test('claude hook commands carry no cmd.exe `call` — claude runs them under sh', async (t) => {
+  // Observed live on Windows: every hook died before reaching the shim with
+  //   /usr/bin/bash: line 1: call: command not found
+  // `call` is a cmd.exe builtin, and it belongs only on the hook runners that
+  // actually go through cmd (agy's hooks.json, Codex's config.toml). Claude
+  // executes each hook with `sh -c`, where quoting alone carries a path with
+  // spaces. This pins the distinction on every platform, not just Windows.
+  const home = tmpHome();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const hive = new HiveManager(() => home);
+  await hive.ensureAgent({ id: 'a1', name: 'A', provider: 'claude', cwd: home });
+
+  const launcher = launcherIn(home);
+  const settings = JSON.parse(fs.readFileSync(path.join(home, 'hive/agents/a1/settings.json'), 'utf8'));
+  const commands = [
+    ...Object.values(settings.hooks).flatMap((matchers) => matchers.flatMap((m) => m.hooks.map((h) => h.command))),
+    settings.statusLine.command
+  ];
+
+  assert.ok(commands.length > 0, 'no claude hook commands to check');
+  for (const cmd of commands) {
+    assert.doesNotMatch(cmd, /^\s*call\b/, `sh cannot run a cmd.exe builtin: ${cmd}`);
+    assert.ok(cmd.startsWith(`"${launcher}"`), `must start with the quoted launcher: ${cmd}`);
+  }
 });
 
 test('every hook installer routes through the launcher — none left on bare node', async (t) => {

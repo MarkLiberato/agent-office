@@ -493,7 +493,9 @@ function FloorTab({ seed }: { seed: { text: string; seq: number } }) {
         provider,
         isGod: a.isGod,
         isAssistant: a.isAssistant,
-        role: roleForHiveSpawn(a)
+        // Pass god's LIVE name (not the `godName` above, which falls back to the
+        // prose "the orchestrator") so the assistant's role names him correctly.
+        role: roleForHiveSpawn(a, agents.find((x) => x.isGod)?.name)
       };
       const res = await window.cth.spawnPty({
         id: a.ptyId,

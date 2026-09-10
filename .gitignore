@@ -9,6 +9,7 @@ dist/
 .env.local
 .env.signing
 .gstack/
+.pnpm-store/
 
 # signing / notarization secrets — NEVER commit these
 *.p8
@@ -35,3 +36,6 @@ docs/blog-preview-*/
 # Finder duplicate files, e.g. "spec 2.js", "sitemap 2.xml"
 *\ 2.*
 *\ [0-9].*
+
+# Kokoro TTS weights — fetched by tools/fetch-voices.cjs, never committed.
+resources/tts/

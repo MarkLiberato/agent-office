@@ -3,6 +3,9 @@ import { CharacterSprite, type Direction, type AnimState } from './CharacterSpri
 import { findPath } from './pathfinding';
 import type { TiledMapRenderer } from './TiledMapRenderer';
 import { ThoughtBubble } from './ThoughtBubble';
+import type { OfficeCharacterName } from './cast';
+import { officeAudio } from '../../audio';
+import type { SpeechPriority } from '../../audio/speechIntent';
 
 // Adapted from shahar061/the-office (office/characters/Character.ts).
 // Differences: keyed by our dynamic agentId (not a fixed role); seat tile +
@@ -66,6 +69,10 @@ interface CharacterOptions {
   /** Direction faced while seated. Default 'down' so the face is toward the user. */
   seatDirection?: Direction;
   onClick?: (agentId: string) => void;
+  /** Roster character this avatar is drawn as — picks the speaking voice. */
+  characterName?: OfficeCharacterName | null;
+  /** The coordinator speaks through the realtime session, never the floor. */
+  isGod?: boolean;
 }
 
 export class Character {
@@ -107,6 +114,11 @@ export class Character {
   private statusGlyph: StatusGlyph = 'none';
   private glyphElapsed = 0;
   private onClick?: (agentId: string) => void;
+  private readonly characterName: OfficeCharacterName | null;
+  private readonly isGod: boolean;
+  /** Work/status text continues changing underneath a spoken caption. */
+  private underlyingThought: { text: string; tool?: string } | null = null;
+  private spokenCaptionActive = false;
 
   // ── Office-life effects (cheer / coffee / watering) ────────────────────────
   /** Effect layer riding on the sprite: confetti, the carried cup, droplets. */
@@ -129,6 +141,8 @@ export class Character {
 
   constructor(options: CharacterOptions) {
     this.agentId = options.agentId;
+    this.characterName = options.characterName ?? null;
+    this.isGod = options.isGod ?? false;
     this.mapRenderer = options.mapRenderer;
     this.sprite = new CharacterSprite(options.frames);
     this.deskTile = options.seatTile;
@@ -343,12 +357,58 @@ export class Character {
   /** Show what the agent is doing right now in the thought cloud above its head.
    *  Empty text renders an animated "…" (thinking); `tool` adds a small glyph. */
   showThought(text: string, tool?: string): void {
-    this.thoughtBubble.show(text, tool);
+    this.underlyingThought = { text, tool };
+    if (!this.spokenCaptionActive) this.thoughtBubble.show(text, tool);
+  }
+
+  /** Curated office banter entry point; live work thoughts remain visual-only. */
+  say(text: string, opts: {
+    priority?: SpeechPriority;
+    conversationId?: string;
+    beatIndex?: number;
+    pan?: number;
+    onStart?: (durationMs: number) => void;
+    onEnd?: () => void;
+  } = {}): string | null {
+    return officeAudio.speak({
+      agentId: this.agentId,
+      character: this.characterName,
+      isGod: this.isGod,
+      text,
+      priority: opts.priority ?? 'conversation',
+      conversationId: opts.conversationId,
+      beatIndex: opts.beatIndex,
+      pan: opts.pan,
+      // A queued line is not a caption. Put words on screen only after the
+      // mixer confirms that the clip really started.
+      onStart: (ms) => {
+        this.spokenCaptionActive = true;
+        this.thoughtBubble.show(text);
+        this.holdThought(ms);
+        opts.onStart?.(ms);
+      },
+      onEnd: () => {
+        this.spokenCaptionActive = false;
+        if (this.underlyingThought) {
+          this.thoughtBubble.show(this.underlyingThought.text, this.underlyingThought.tool);
+        } else {
+          this.thoughtBubble.startLinger();
+        }
+        opts.onEnd?.();
+      }
+    });
+  }
+
+  /** Keep the thought cloud up for the length of the line being spoken, so the
+   *  cloud does not fade out from under the agent's own voice. */
+  holdThought(ms: number): void {
+    this.thoughtBubble.holdFor(ms);
   }
 
   /** Fade the thought cloud out after a short linger — the agent went quiet. */
   hideThought(): void {
-    this.thoughtBubble.startLinger();
+    this.underlyingThought = null;
+    if (!this.spokenCaptionActive) this.thoughtBubble.startLinger();
   }
 
   /** The thought cloud's current base screen rect (no lift), or null if hidden.
